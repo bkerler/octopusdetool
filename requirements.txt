@@ -1,0 +1,4 @@
+requests>=2.28.0
+openpyxl>=3.0.0
+tkcalendar>=1.6.0  # Optional: for enhanced calendar widget
+briefcase

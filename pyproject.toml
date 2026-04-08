@@ -1,0 +1,159 @@
+[build-system]
+requires = ["hatchling","briefcase"]
+build-backend = "hatchling.build"
+
+[tool.briefcase]
+project_name = "OctopusDETool"
+bundle = "de.revskills.octopusdetool"
+version = "1.0.3"
+url = "https://github.com/bkerler/octopusdetool"
+license.file = "LICENSE"
+description = "GUI for the Octopus Energy DE Smart Meter Data Fetcher"
+author = "bkerler"
+author_email = "info@revskills.de"
+requires-python = ">= 3.10"
+
+[tool.briefcase.app.octopusdetool]
+formal_name = "OctopusDETool"
+icon = "octopusdetool/octopusdetool_gui"
+installer_icon = "octopusdetool/octopusdetool_gui"
+description = "Graphical tool for getting Octopus Energy DE smart meter readings"
+sources = [
+    "octopusdetool"
+]
+test_sources = [
+    "tests",
+]
+requires = [
+    "openpyxl>=3.0.0",
+    "requests>=2.28.0"
+]
+test_requires = [
+    "pytest",
+]
+
+[tool.briefcase.app.octopusdetool.macOS]
+universal_build = true
+# As of Pyside 6.8, PySide enforces a macOS 12 minimum on wheels.
+min_os_version = "12.0"
+requires = [
+    "std-nslog~=1.0.3",
+]
+
+[tool.briefcase.app.octopusdetool.linux]
+system_requires = [
+]
+
+[tool.briefcase.app.octopusdetool.linux.system.debian]
+system_requires = [
+]
+
+system_runtime_requires = [
+    # Derived from https://doc.qt.io/qt-6/linux-requirements.html
+    "libxext6",
+    "libxrender1",
+    "libx11-xcb1",
+    "libxkbcommon-x11-0",
+    "libxcb-image0",
+    "libxcb-cursor0",
+    "libxcb-shape0",
+    "libxcb-randr0",
+    "libxcb-xfixes0",
+    "libxcb-sync1",
+    "libxcb-icccm4",
+    "libxcb-keysyms1",
+    "libfontconfig1",
+    "libsm6",
+    "libice6",
+    "libglib2.0-0",
+    "libgl1",
+    "libegl1",
+    "libdbus-1-3",
+]
+
+[tool.briefcase.app.octopusdetool.linux.system.rhel]
+system_requires = [
+]
+
+system_runtime_requires = [
+]
+
+[tool.briefcase.app.octopusdetool.linux.system.suse]
+system_requires = [
+]
+
+system_runtime_requires = [
+]
+
+[tool.briefcase.app.octopusdetool.linux.system.arch]
+system_requires = [
+]
+
+system_runtime_requires = [
+]
+
+
+[tool.briefcase.app.octopusdetool.linux.appimage]
+manylinux = "manylinux_2_28"
+system_requires = [
+]
+
+linuxdeploy_plugins = [
+]
+
+[tool.briefcase.app.octopusdetool.linux.flatpak]
+flatpak_runtime = "org.kde.Platform"
+flatpak_runtime_version = "6.9"
+flatpak_sdk = "org.kde.Sdk"
+
+# Mobile deployments
+[tool.briefcase.app.octopusdetool.iOS]
+supported = false
+
+[tool.briefcase.app.octopusdetool.android]
+supported = false
+
+# Web deployments
+[tool.briefcase.app.octopusdetool.web]
+supported = false
+
+[project]
+name = "OctopusDETool"
+description = "Octopus Energy Germany Smart Meter Data Fetcher"
+maintainers = [
+    {name = "Bjoern Kerler", email = "info@revskills.de"}
+]
+readme = "README.md"
+license = {file = "LICENSE"}
+version = "1.0.3"
+requires-python = ">= 3.10"
+dependencies = [
+    "openpyxl>=3.0.0",
+    "requests>=2.28.0"
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Operating System :: OS Independent",
+]
+keywords = ["octopus", "energy", "smartmeter", "germany", "electricity"]
+
+[project.urls]
+Repository = "https://github.com/bkerler/octopusdetool.git"
+Issues = "https://github.com/bkerler/octopusdetool/issues"
+
+[project.gui-scripts]
+octopusdetool_gui = "octopusdetool.octopusdetool_gui:main"
+octopusdetool = "octopusdetool.octopusdetool:main"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "octopusdetool/",
+    "octopusdetool/octopusdetool_gui.svg",
+    "octopusdetool/octopusdetool_gui.ico",
+    "octopusdetool/octopusdetool_gui-*.png"
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["octopusdetool"]

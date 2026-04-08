@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=OctopusDETool
+Exec=octopusdetool_gui.py %F
+Comment=GUI for retrieving Octopus Energy DE smartmeter data
+Icon=octopusdetool_gui
+Categories=Utility;Science;
+Terminal=false

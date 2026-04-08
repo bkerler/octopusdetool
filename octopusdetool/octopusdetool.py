@@ -1,0 +1,935 @@
+#!/usr/bin/env python3
+"""
+Octopus Energy Germany Smart Meter Data Fetcher
+
+Fetches electricity consumption data from Octopus Energy Germany API
+and outputs to CSV format. Can also fill German electricity tariff Excel templates.
+"""
+
+import argparse
+import csv
+import json
+import os
+import platform
+import shutil
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import requests
+
+
+def get_documents_folder() -> Path:
+    """Get the user's Documents folder path (cross-platform)."""
+    system = platform.system()
+    
+    if system == "Windows":
+        # Windows: use %USERPROFILE%\Documents
+        docs = Path.home() / "Documents"
+    elif system == "Darwin":
+        # macOS: ~/Documents
+        docs = Path.home() / "Documents"
+    else:
+        # Linux/Unix: try XDG_DOCUMENTS_DIR, fallback to ~/Documents
+        xdg_docs = os.environ.get("XDG_DOCUMENTS_DIR")
+        if xdg_docs:
+            docs = Path(xdg_docs)
+        else:
+            docs = Path.home() / "Documents"
+    
+    return docs
+
+
+def get_smartmeter_data_folder() -> Path:
+    """Get the smartmeter_data folder path (in Documents)."""
+    return get_documents_folder() / "smartmeter_data"
+
+
+def ensure_excel_template():
+    """Copy Excel template to smartmeter_data folder if it doesn't exist."""
+    smartmeter_folder = get_smartmeter_data_folder()
+    smartmeter_folder.mkdir(parents=True, exist_ok=True)
+    
+    # Source: template in octopusdetool package directory
+    source = Path(__file__).parent / "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+    # Target: Documents/smartmeter_data/
+    target = smartmeter_folder / "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+    
+    if source.exists() and not target.exists():
+        shutil.copy2(source, target)
+        print(f"Excel-Vorlage kopiert nach: {target}")
+    
+    return target if target.exists() else source
+
+
+def get_default_output_path() -> Path:
+    """Get the default CSV output path."""
+    return get_smartmeter_data_folder() / "consumption.csv"
+
+
+def get_default_excel_path() -> Path:
+    """Get the default Excel template path."""
+    template = get_smartmeter_data_folder() / "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+    if template.exists():
+        return template
+    # Fallback to package directory
+    return Path(__file__).parent / "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+
+
+# German Octopus Energy API endpoints
+GRAPHQL_URL = "https://api.oeg-kraken.energy/v1/graphql/"
+
+# Authentication mutation
+AUTH_MUTATION = """
+mutation krakenTokenAuthentication($email: String!, $password: String!) {
+    obtainKrakenToken(input: { email: $email, password: $password }) {
+        token
+        payload
+    }
+}
+"""
+
+# Meter discovery query
+ACCOUNT_DETAILS_QUERY = """
+query AccountDetails($accountNumber: String!) {
+    account(accountNumber: $accountNumber) {
+        id
+        allProperties {
+            id
+            electricityMalos {
+                maloNumber
+                meter { id number shouldReceiveSmartMeterData }
+            }
+        }
+    }
+}
+"""
+
+# Consumption query - using measurements with hourly interval filter and pagination
+MEASUREMENTS_QUERY = """
+query getAccountMeasurements(
+    $propertyId: ID!
+    $first: Int!
+    $after: String
+    $utilityFilters: [UtilityFiltersInput!]
+    $startOn: Date
+    $endOn: Date
+    $startAt: DateTime
+    $endAt: DateTime
+    $timezone: String
+) {
+    property(id: $propertyId) {
+        measurements(
+            first: $first
+            after: $after
+            utilityFilters: $utilityFilters
+            startOn: $startOn
+            endOn: $endOn
+            startAt: $startAt
+            endAt: $endAt
+            timezone: $timezone
+        ) {
+            edges {
+                cursor
+                node {
+                    value
+                    unit
+                    ... on IntervalMeasurementType {
+                        startAt
+                        endAt
+                        durationInSeconds
+                    }
+                    metaData {
+                        statistics {
+                            costExclTax {
+                                pricePerUnit {
+                                    amount
+                                }
+                                costCurrency
+                                estimatedAmount
+                            }
+                            costInclTax {
+                                costCurrency
+                                estimatedAmount
+                            }
+                            value
+                            description
+                            label
+                            type
+                        }
+                    }
+                }
+            }
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+        }
+    }
+}
+"""
+
+
+class OctopusGermanyClient:
+    """Client for Octopus Energy Germany GraphQL API."""
+
+    def __init__(self, email: str, password: str, debug: bool = False):
+        self.email = email
+        self.password = password
+        self.token = None
+        self.debug = debug
+
+    def _log_debug(self, message: str):
+        """Print debug message if debug mode is enabled."""
+        if self.debug:
+            print(f"[DEBUG] {message}")
+
+    def authenticate(self) -> bool:
+        """Authenticate and get JWT token."""
+        variables = {
+            "email": self.email,
+            "password": self.password
+        }
+        
+        payload = {
+            "query": AUTH_MUTATION,
+            "variables": variables
+        }
+        
+        if self.debug:
+            print("\n" + "="*80)
+            print("AUTH REQUEST:")
+            print("="*80)
+            print(f"URL: {GRAPHQL_URL}")
+            print(f"Payload: {json.dumps(payload, indent=2)}")
+            print("="*80)
+        
+        try:
+            response = requests.post(GRAPHQL_URL, json=payload)
+            
+            if self.debug:
+                print("\n" + "="*80)
+                print("AUTH RESPONSE:")
+                print("="*80)
+                print(f"Status: {response.status_code}")
+                try:
+                    print(f"Body: {json.dumps(response.json(), indent=2)}")
+                except:
+                    print(f"Body: {response.text}")
+                print("="*80 + "\n")
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            if "errors" in data:
+                print(f"Authentifizierungsfehler: {data['errors']}")
+                return False
+            
+            self.token = data["data"]["obtainKrakenToken"]["token"]
+            self._log_debug(f"Got token (first 20 chars): {self.token[:20]}...")
+            return True
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Netzwerkfehler bei der Authentifizierung: {e}")
+            return False
+        except (KeyError, TypeError) as e:
+            print(f"Unerwartetes Antwortformat: {e}")
+            self._log_debug(f"Response: {response.text}")
+            return False
+
+    def _graphql_request(self, query: str, variables: dict) -> dict:
+        """Make an authenticated GraphQL request."""
+        if not self.token:
+            raise RuntimeError("Not authenticated. Call authenticate() first.")
+        
+        headers = {"Authorization": f"JWT {self.token}"}
+        payload = {"query": query, "variables": variables}
+        
+        if self.debug:
+            print("\n" + "="*80)
+            print("GRAPHQL REQUEST:")
+            print("="*80)
+            print(f"URL: {GRAPHQL_URL}")
+            print(f"Headers: {headers}")
+            print(f"Payload: {json.dumps(payload, indent=2)}")
+            print("="*80)
+        
+        try:
+            response = requests.post(GRAPHQL_URL, json=payload, headers=headers)
+            
+            if self.debug:
+                print("\n" + "="*80)
+                print("GRAPHQL RESPONSE:")
+                print("="*80)
+                print(f"Status: {response.status_code}")
+                try:
+                    response_data = response.json()
+                    print(f"Body: {json.dumps(response_data, indent=2)}")
+                except:
+                    print(f"Body: {response.text}")
+                print("="*80 + "\n")
+            
+            response.raise_for_status()
+            data = response.json()
+            
+            if "errors" in data and not self.debug:
+                print(f"GraphQL errors: {data['errors']}")
+                # Return partial data if available
+                return data.get("data", {})
+            
+            return data.get("data", {})
+            
+        except requests.exceptions.RequestException as e:
+            print(f"Netzwerkfehler: {e}")
+            return {}
+
+    def get_account_details(self, account_number: str) -> dict:
+        """Get account details including meter information."""
+        variables = {"accountNumber": account_number}
+        result = self._graphql_request(ACCOUNT_DETAILS_QUERY, variables)
+        return result.get("account", {})
+
+    def find_smart_meter(self, account_number: str) -> tuple[str, str, str] | None:
+        """
+        Find the smart meter ID and its parent property for an account.
+        Returns tuple of (malo_number, meter_id, property_id) or None if not found.
+        """
+        variables = {"accountNumber": account_number}
+        result = self._graphql_request(ACCOUNT_DETAILS_QUERY, variables)
+        account_data = result.get("account", {})
+        
+        if not account_data:
+            print("Keine Kontodaten gefunden")
+            return None
+        
+        all_properties = account_data.get("allProperties", [])
+        
+        if not all_properties:
+            print("Keine Eigenschaften für dieses Konto gefunden")
+            return None
+        
+        # Look for smart meters in all properties
+        for prop in all_properties:
+            property_id = prop.get("id")
+            malos = prop.get("electricityMalos", [])
+            
+            for malo in malos:
+                malo_number = malo.get("maloNumber", "unknown")
+                meter_data = malo.get("meter", {})
+                
+                if meter_data:
+                    meter_id = meter_data.get("id")
+                    should_receive_smart = meter_data.get("shouldReceiveSmartMeterData", False)
+                    
+                    if meter_id:
+                        print(f"Zähler {meter_id} für MALO {malo_number} gefunden")
+                        print(f"  - Eigenschafts-ID: {property_id}")
+                        print(f"  - Soll Smart-Meter-Daten empfangen: {should_receive_smart}")
+                        return (malo_number, meter_id, property_id)
+        
+        return None
+
+    def get_consumption_graphql(self, property_id, period_from=None, period_to=None, fetch_all=False):
+        """
+        Get consumption data using GraphQL measurements query with hourly interval filter.
+        
+        Args:
+            property_id: The property ID (from find_smart_meter)
+            period_from: Start datetime (optional)
+            period_to: End datetime (optional)
+            fetch_all: If True, fetch all pages of data
+            
+        Returns:
+            List of consumption readings with start, end, and consumption_kwh
+        """
+        # Safety: Never fetch data for current day or future - data may be incomplete
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        yesterday_end = today - timedelta(seconds=1)
+        
+        if period_to and period_to >= today:
+            period_to = yesterday_end
+            self._log_debug(f"Clamped period_to to yesterday: {period_to}")
+        
+        all_intervals = []
+        after_cursor = None
+        page_count = 0
+        max_pages = 100 if fetch_all else 1
+        
+        self._log_debug(f"Fetching measurements for property {property_id}")
+        self._log_debug(f"fetch_all={fetch_all}, max_pages={max_pages}")
+        
+        while page_count < max_pages:
+            page_count += 1
+            
+            # Build variables for the measurements query
+            variables = {
+                "propertyId": property_id,
+                "first": 100,
+                "utilityFilters": [{
+                    "electricityFilters": {
+                        "readingFrequencyType": "HOUR_INTERVAL"
+                    }
+                }],
+                "timezone": "Europe/Berlin"
+            }
+            
+            if after_cursor:
+                variables["after"] = after_cursor
+            
+            # Add date filters if specified
+            if period_from:
+                if period_from.tzinfo is None:
+                    period_from = period_from.replace(tzinfo=timezone(timedelta(hours=1)))  # Assume Berlin time
+                variables["startAt"] = period_from.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            
+            if period_to:
+                if period_to.tzinfo is None:
+                    period_to = period_to.replace(tzinfo=timezone(timedelta(hours=1)))  # Assume Berlin time
+                variables["endAt"] = period_to.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            
+            self._log_debug(f"Fetching page {page_count}, after={after_cursor}")
+            
+            result = self._graphql_request(MEASUREMENTS_QUERY, variables)
+            
+            if not result:
+                self._log_debug("No response data, stopping")
+                break
+            
+            property_data = result.get("property")
+            if not property_data:
+                self._log_debug(f"No property data in response: {result}")
+                break
+            
+            measurements_data = property_data.get("measurements")
+            if not measurements_data:
+                self._log_debug(f"No measurements data: {property_data}")
+                break
+            
+            edges = measurements_data.get("edges", [])
+            page_info = measurements_data.get("pageInfo", {})
+            
+            self._log_debug(f"Page {page_count}: Got {len(edges)} edges")
+            self._log_debug(f"Page info: hasNextPage={page_info.get('hasNextPage')}, endCursor={page_info.get('endCursor')}")
+            
+            if not edges:
+                self._log_debug("No more edges, stopping pagination")
+                break
+            
+            # Parse measurements from edges
+            for edge in edges:
+                node = edge.get("node", {})
+                value = node.get("value")
+                start_at = node.get("startAt")
+                end_at = node.get("endAt")
+                duration = node.get("durationInSeconds")
+                
+                if value is not None and start_at and end_at:
+                    try:
+                        start_time = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
+                        end_time = datetime.fromisoformat(end_at.replace("Z", "+00:00"))
+                        
+                        all_intervals.append({
+                            "start": start_time,
+                            "end": end_time,
+                            "consumption_kwh": round(float(value), 4),
+                            "duration_seconds": duration,
+                            "unit": node.get("unit", "kWh")
+                        })
+                    except (ValueError, TypeError) as e:
+                        self._log_debug(f"Error parsing measurement: {e}")
+                        continue
+            
+            # Check if there are more pages
+            if not page_info.get("hasNextPage"):
+                self._log_debug("No more pages available")
+                break
+            
+            after_cursor = page_info.get("endCursor")
+            
+            if not fetch_all:
+                self._log_debug("fetch_all=False, stopping after first page")
+                break
+        
+        # Sort by start time
+        all_intervals.sort(key=lambda x: x["start"])
+        
+        self._log_debug(f"Total: Generated {len(all_intervals)} consumption intervals from {page_count} pages")
+        
+        return all_intervals
+
+
+def format_datetime(dt: datetime) -> str:
+    """Format datetime for CSV output (European format: DD.MM.YYYY HH:MM:SS)."""
+    return dt.strftime("%d.%m.%Y %H:%M:%S")
+
+
+def parse_date(date_str: str) -> datetime:
+    """Parse date string in European format (DD.MM.YYYY)."""
+    return datetime.strptime(date_str, "%d.%m.%Y")
+
+
+def parse_datetime(datetime_str: str) -> datetime:
+    """Parse datetime string in European format (DD.MM.YYYY HH:MM:SS)."""
+    return datetime.strptime(datetime_str, "%d.%m.%Y %H:%M:%S")
+
+
+def fill_excel_template(readings: list, template_path: str, output_path: str):
+    """
+    Fill a German electricity tariff Excel template with consumption data.
+    
+    Updates:
+    1. Einstellungen sheet: B5 = first date, B6 = last date from CSV
+    2. Verbrauch sheet: Only column C (rows 9+) where date/hour match and cell is empty
+    
+    Args:
+        readings: List of consumption readings
+        template_path: Path to the Excel template
+        output_path: Path for the output file
+    """
+    try:
+        import openpyxl
+        from openpyxl.cell.cell import MergedCell
+    except ImportError:
+        print("Fehler: openpyxl ist für Excel-Unterstützung erforderlich")
+        print("Installieren mit: pip install openpyxl")
+        return False
+    
+    try:
+        # Create backup of original file
+        import shutil
+        backup_path = template_path + ".backup"
+        shutil.copy2(template_path, backup_path)
+        print(f"Sicherung erstellt: {backup_path}")
+        
+        # Load the template with keep_vba=True to preserve macros
+        # Use data_only=False to preserve formulas
+        wb = openpyxl.load_workbook(template_path, data_only=False, keep_vba=True)
+        
+        print(f"Vorlage geladen: {template_path} (mit VBA/Makros erhalten)")
+        
+        # Get the sheets
+        ws_verbrauch = wb['Verbrauch']  # Consumption sheet
+        ws_einstellungen = wb['Einstellungen']  # Settings sheet
+        
+        # Create a dictionary of readings by datetime for quick lookup
+        # Key: (date, hour) tuple, Value: consumption_kwh
+        readings_by_datetime = {}
+        for reading in readings:
+            start = reading["start"]
+            date_key = start.strftime("%Y-%m-%d")
+            hour_key = start.hour  # 0-23
+            readings_by_datetime[(date_key, hour_key)] = reading["consumption_kwh"]
+        
+        print(f"{len(readings_by_datetime)} stündliche Einträge zum Abgleich vorhanden")
+        
+        # Get date range from CSV
+        csv_dates = sorted(set(k[0] for k in readings_by_datetime.keys()))
+        first_date = csv_dates[0]
+        last_date = csv_dates[-1]
+        print(f"CSV-Datumsbereich: {first_date} bis {last_date}")
+        
+        # Update Einstellungen sheet: B5 = start date, B6 = end date
+        print(f"\nUpdating Einstellungen sheet:")
+        first_date_dt = datetime.strptime(first_date, "%Y-%m-%d")
+        last_date_dt = datetime.strptime(last_date, "%Y-%m-%d")
+        
+        # Format as German date (DD.MM.YYYY) for the Excel
+        ws_einstellungen['B5'].value = first_date_dt
+        ws_einstellungen['B6'].value = last_date_dt
+        print(f"  B5 (Start): {first_date}")
+        print(f"  B6 (Ende): {last_date}")
+        
+        # Template structure for Verbrauch sheet
+        DATA_START_ROW = 9
+        DATE_COL = 1  # Column A
+        HOUR_COL = 2  # Column B
+        CONSUMPTION_COL = 3  # Column C
+        
+        # Fill consumption values in Verbrauch sheet
+        # The formulas in A and B will auto-calculate based on B5
+        # We only need to fill column C where we have matching data and cell is empty
+        print(f"\nFilling Verbrauch sheet (column C from row {DATA_START_ROW})...")
+        
+        filled_count = 0
+        rows_checked = 0
+        
+        # Calculate how many rows we need to check (24 hours * number of days in range)
+        days_count = (last_date_dt - first_date_dt).days + 1
+        expected_rows = days_count * 24
+        max_row = DATA_START_ROW + expected_rows + 48  # Add buffer
+        
+        for row in range(DATA_START_ROW, min(max_row + 1, ws_verbrauch.max_row + 1)):
+            rows_checked += 1
+            
+            # Get date from column A (calculated from formula based on B5)
+            date_cell = ws_verbrauch.cell(row=row, column=DATE_COL)
+            if isinstance(date_cell, MergedCell):
+                continue
+            
+            # For formula cells, we need to calculate the value ourselves
+            # Formula: =Einstellungen!$B$5+INT((ROW()-9)/24)
+            days_offset = (row - DATA_START_ROW) // 24
+            date_parsed = first_date_dt + timedelta(days=days_offset)
+            
+            # Get hour from column B
+            # Formula: =MOD(ROW()-9,24)
+            hour_parsed = (row - DATA_START_ROW) % 24
+            
+            # Create lookup key
+            date_key = date_parsed.strftime("%Y-%m-%d")
+            lookup_key = (date_key, hour_parsed)
+            
+            # Check if we have data for this date/hour
+            if lookup_key in readings_by_datetime:
+                consumption_cell = ws_verbrauch.cell(row=row, column=CONSUMPTION_COL)
+                if isinstance(consumption_cell, MergedCell):
+                    continue
+                
+                # Only write if cell is empty
+                current_value = consumption_cell.value
+                if current_value is None or current_value == '' or current_value == 0:
+                    consumption_cell.value = readings_by_datetime[lookup_key]
+                    filled_count += 1
+            
+            # Progress update
+            if rows_checked % 1000 == 0:
+                print(f"  {rows_checked} Zeilen geprüft, {filled_count} Werte gefüllt...")
+        
+        print(f"{filled_count} Verbrauchswerte in {rows_checked} Zeilen gefüllt")
+        
+        # Save the workbook
+        wb.save(output_path)
+        print(f"Excel-Datei gespeichert nach: {output_path}")
+        return True
+        
+    except Exception as e:
+        print(f"Fehler beim Füllen der Excel-Vorlage: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
+    """
+    Read existing consumption.csv and return data plus latest timestamp.
+    
+    Returns:
+        Tuple of (existing_data, latest_timestamp)
+    """
+    if not csv_path.exists():
+        return [], None
+    
+    existing_data = []
+    latest_timestamp = None
+    
+    try:
+        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    # Try European format first (DD.MM.YYYY HH:MM:SS), then ISO
+                    try:
+                        start = datetime.strptime(row['start'], "%d.%m.%Y %H:%M:%S")
+                        end = datetime.strptime(row['end'], "%d.%m.%Y %H:%M:%S")
+                    except ValueError:
+                        # Fallback to ISO format for backwards compatibility
+                        start = datetime.fromisoformat(row['start'])
+                        end = datetime.fromisoformat(row['end'])
+                    consumption = float(row['consumption_kwh'])
+                    
+                    existing_data.append({
+                        'start': start,
+                        'end': end,
+                        'consumption_kwh': consumption
+                    })
+                    
+                    if latest_timestamp is None or end > latest_timestamp:
+                        latest_timestamp = end
+                        
+                except (KeyError, ValueError) as e:
+                    continue
+        
+        print(f"Read {len(existing_data)} existing readings from {csv_path}")
+        if latest_timestamp:
+            print(f"Latest data in CSV: {latest_timestamp}")
+        
+        return existing_data, latest_timestamp
+        
+    except Exception as e:
+        print(f"Error reading existing CSV: {e}")
+        return [], None
+
+
+def merge_and_save_csv(all_data: list, csv_path: Path):
+    """
+    Merge all data, remove duplicates, sort by time, and save to CSV.
+    
+    Args:
+        all_data: List of all readings (existing + new)
+        csv_path: Path to save CSV
+    """
+    if not all_data:
+        print("Keine Daten zum Speichern")
+        return
+    
+    # Remove duplicates based on start time (keep last occurrence)
+    seen = {}
+    for reading in all_data:
+        key = reading['start'].isoformat()
+        seen[key] = reading
+    
+    # Convert back to list and sort
+    unique_data = list(seen.values())
+    unique_data.sort(key=lambda x: x['start'])
+    
+    # Write to CSV
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['start', 'end', 'consumption_kwh'])
+        
+        for reading in unique_data:
+            writer.writerow([
+                format_datetime(reading['start']),
+                format_datetime(reading['end']),
+                reading['consumption_kwh']
+            ])
+    
+    print(f"{len(unique_data)} Einträge gespeichert nach {csv_path}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Fetch smart meter data from Octopus Energy Germany"
+    )
+    parser.add_argument(
+        "--email", 
+        required=True,
+        help="Your Octopus Energy email"
+    )
+    parser.add_argument(
+        "--password", 
+        required=True,
+        help="Your Octopus Energy password"
+    )
+    parser.add_argument(
+        "--account-number", 
+        required=True,
+        help="Your account number (e.g., A-12345678)"
+    )
+    parser.add_argument(
+        "--meter-id", 
+        help="Smart meter ID (optional - will auto-discover if not provided)"
+    )
+    parser.add_argument(
+        "--property-id", 
+        help="Property ID (optional - will auto-discover if not provided)"
+    )
+    parser.add_argument(
+        "--output", 
+        default=str(get_default_output_path()),
+        help=f"Output CSV file path (default: {get_default_output_path()})"
+    )
+    parser.add_argument(
+        "--period-from", 
+        help="Start date (DD.MM.YYYY)"
+    )
+    parser.add_argument(
+        "--period-to", 
+        help="End date (DD.MM.YYYY)"
+    )
+    parser.add_argument(
+        "--format", 
+        choices=["csv", "hourly", "all"],
+        default="csv",
+        help="Output format: csv (raw intervals), hourly (interpolated), all (all columns)"
+    )
+    parser.add_argument(
+        "--fill-excel",
+        metavar="TEMPLATE",
+        default=str(get_default_excel_path()),
+        help=f"Fill an Excel template with consumption data (default: {get_default_excel_path()})"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug output for all API requests"
+    )
+    
+    args = parser.parse_args()
+    
+    # Ensure Excel template exists in Documents folder
+    ensure_excel_template()
+    
+    # Parse dates
+    period_from = None
+    period_to = None
+    
+    if args.period_from:
+        period_from = parse_date(args.period_from)
+        print(f"Zeitraum von: {period_from}")
+    
+    if args.period_to:
+        period_to = parse_date(args.period_to) + timedelta(days=1) - timedelta(seconds=1)
+        print(f"Zeitraum bis: {period_to}")
+    
+    # Read existing CSV first (before any authentication)
+    output_path = Path(args.output)
+    
+    # Create output directory if it doesn't exist
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    existing_data, latest_timestamp = read_existing_csv(output_path)
+    
+    # Determine date range for fetching new data
+    # Never fetch data for the current day (data may be incomplete)
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    yesterday = today - timedelta(days=1)
+    yesterday_end = yesterday + timedelta(days=1) - timedelta(seconds=1)
+    
+    fetch_from = period_from
+    fetch_to = period_to
+    
+    # Clamp fetch_to to yesterday if not specified or if it's today or in the future
+    if fetch_to is None or fetch_to >= today:
+        fetch_to = yesterday_end
+        print(f"\nNote: Limiting data fetch to yesterday ({yesterday.date()}) - current day data excluded")
+    
+    if not fetch_from and latest_timestamp:
+        # Start from the latest data we have (minus 1 hour overlap to be safe)
+        fetch_from = latest_timestamp - timedelta(hours=1)
+        # But don't go beyond yesterday
+        if fetch_from > yesterday_end:
+            fetch_from = yesterday_end
+        print(f"\nAuto-detected: Fetching new data from {fetch_from}")
+    
+    # Check if we actually need to fetch data
+    # If we have existing data and the user just wants to fill Excel, skip fetching
+    need_to_fetch = True
+    if existing_data and not args.period_from and not args.period_to:
+        # We have data and no specific date range requested by user
+        # Check if we already have data up to yesterday
+        if latest_timestamp and latest_timestamp.date() >= yesterday.date():
+            print(f"\nCSV already has data up to {latest_timestamp.date()}")
+            print("Keine neuen Daten abzurufen. Verwenden Sie --period-from für erzwungenen Abruf.")
+            need_to_fetch = False
+            # Reset fetch_from since we don't need to fetch
+            fetch_from = None
+    
+    # Initialize client and authenticate only if we need to fetch
+    client = None
+    property_id = args.property_id
+    
+    if need_to_fetch:
+        client = OctopusGermanyClient(args.email, args.password, debug=args.debug)
+        
+        # Authenticate
+        print("\nAuthenticating...")
+        if not client.authenticate():
+            print("Authentifizierung fehlgeschlagen!")
+            sys.exit(1)
+        print("Authentication successful!")
+        
+        # Get meter ID if not provided
+        if not property_id:
+            print("\nDiscovering smart meter...")
+            meter_info = client.find_smart_meter(args.account_number)
+            if meter_info:
+                malo_number, meter_id, property_id = meter_info
+                print(f"Verwende Zähler-ID: {meter_id}")
+                print(f"Verwende Eigenschafts-ID: {property_id}")
+            else:
+                print("Kein Smart Meter gefunden!")
+                print("\nTroubleshooting:")
+                print("1. Prüfen Sie, ob ein Smart Meter installiert ist")
+                print("2. Vergewissern Sie sich, dass der Zähler für Smart-Readings freigeschaltet ist")
+                print("3. Kontaktieren Sie Octopus Energy, falls das Problem weiterhin besteht")
+                sys.exit(1)
+    
+    # Fetch consumption data only if needed
+    new_readings = []
+    if need_to_fetch:
+        print("\nFetching consumption data...")
+        if fetch_from or fetch_to:
+            print(f"Datumsbereich: {fetch_from or 'alle'} bis {fetch_to or 'alle'}")
+        else:
+            print("Alle verfügbaren Daten werden abgerufen...")
+        
+        new_readings = client.get_consumption_graphql(
+            property_id,
+            period_from=fetch_from,
+            period_to=fetch_to,
+            fetch_all=True
+        )
+    
+    if not new_readings and not existing_data:
+        print("\nNo consumption data found!")
+        print("\nPossible reasons:")
+        print("- The meter may not have smart meter functionality enabled yet")
+        print("- No readings have been received from the meter")
+        print("- The date range is outside the available data")
+        sys.exit(1)
+    
+    if new_readings:
+        print(f"\nFetched {len(new_readings)} new consumption intervals")
+        
+        # Calculate total consumption
+        total_kwh = sum(r["consumption_kwh"] for r in new_readings)
+        print(f"Gesamtverbrauch neuer Daten: {total_kwh:.2f} kWh")
+    else:
+        print("\nNo new data to fetch (everything already in CSV)")
+    
+    # Merge existing and new data
+    all_readings = existing_data + new_readings
+    
+    if not all_readings:
+        print("No data to save!")
+        sys.exit(1)
+    
+    # Remove duplicates and save
+    print(f"\nMerging data: {len(existing_data)} existing + {len(new_readings)} new = {len(all_readings)} total")
+    merge_and_save_csv(all_readings, output_path)
+    
+    # Read back the merged data (now deduplicated and sorted)
+    final_data, _ = read_existing_csv(output_path)
+    
+    # Show data summary
+    print(f"\nTotal data in CSV: {len(final_data)} readings")
+    if final_data:
+        total_kwh = sum(r["consumption_kwh"] for r in final_data)
+        print(f"Gesamtverbrauch in CSV: {total_kwh:.2f} kWh")
+        
+        # Show data granularity
+        if len(final_data) > 1:
+            durations = []
+            for i in range(1, min(10, len(final_data))):
+                duration = (final_data[i]["start"] - final_data[i-1]["start"]).total_seconds() / 3600
+                durations.append(duration)
+            avg_duration = sum(durations) / len(durations)
+            print(f"Durchschnittliches Intervall: {avg_duration:.1f} Stunden")
+    
+    # Fill Excel template if requested
+    if args.fill_excel:
+        template_path = Path(args.fill_excel)
+        if not template_path.exists():
+            print(f"\nError: Excel template not found: {template_path}")
+        else:
+            print(f"\nFilling Excel template from CSV data: {template_path}")
+            success = fill_excel_template(
+                final_data, 
+                str(template_path), 
+                str(template_path)  # Save in-place
+            )
+            if not success:
+                sys.exit(1)
+    
+    print("\n" + "="*60)
+    print("Daten erfolgreich geschrieben nach:")
+    print(f"  - CSV: {output_path}")
+    if args.fill_excel:
+        print(f"  - Excel: {Path(args.fill_excel)}")
+    print("="*60)
+    print("\nDone!")
+
+
+if __name__ == "__main__":
+    main()
