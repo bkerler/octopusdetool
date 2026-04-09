@@ -22,6 +22,7 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 - **Automatische Excel-Vorlage** - Existiert die angegebene Excel-Datei noch nicht, wird die mitgelieferte Blanko-Vorlage unter genau diesem Dateinamen erstellt
 
 ### Screenshot
+<img width="1156" height="1159" alt="image" src="https://github.com/user-attachments/assets/25c95508-d72d-4598-ab2a-b6fd9a7505ef" />
 
 ## Funktionen
 - 📊 **Stündliche Verbrauchsdaten** - Import und Export
