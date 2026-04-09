@@ -207,13 +207,15 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 ### Funktionen
 
 - **Eingabefelder** für E-Mail und Passwort
+- **Passwortanzeige umschaltbar** - Passwort ist standardmäßig maskiert; `Show password` blendet es ein
 - **Ausgabeformatauswahl**: Excel (Standard), CSV, JSON oder YAML
 - **Excel-Dateiauswahl** mit Dateibrowser
 - **Datumsbereichsauswahl** mit Kalender-Buttons
 - **Fortschrittsanzeige** - Zeigt "Empfange Daten... X Einträge (Seite Y)"
-- **Konfigurationsspeicherung** - Speichert E-Mail/Passwort in `config.json`
+- **Konfigurationsspeicherung** - Speichert E-Mail/Passwort verschlüsselt in `config.json` (AES-256-GCM, Base64)
 - **Debug-Ausgabe** - Wenn aktiviert, wird der vollständige GUI-Debug-Log nach `~/Documents/smartmeter_data/log.txt` geschrieben
 - **Automatisches Laden** - Lädt gespeicherte Konfiguration beim Start
+- **Automatische Migration** - Bereits vorhandene Klartext-Zugangsdaten in `config.json` werden beim Laden automatisch verschlüsselt
 
 ### Screenshot
 
@@ -223,7 +225,8 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 │  Smart Meter Daten-Logger                   │
 ├─────────────────────────────────────────────┤
 │  E-Mail:        [____________________]      │
-│  Passwort:      [____________________]      │
+│  Passwort:      [***************     ] [ ]  │
+│                               Show password │
 │                                             │
 │  [✓] Konfiguration in config.json speichern │
 │  [ ] Debug-Ausgabe aktivieren               │
@@ -292,9 +295,11 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 
 ## Sicherheitshinweise
 
-- Das Skript speichert Ihr Passwort nicht dauerhaft
+- Das CLI-Skript speichert Ihr Passwort nicht dauerhaft
 - Tokens sind 60 Minuten gültig
 - Die GUI kann Zugangsdaten optional in `config.json` speichern
+- `email` und `password` werden dabei mit AES-256-GCM verschlüsselt und als Base64 abgelegt
+- Vorhandene Klartext-Einträge in älteren `config.json`-Dateien werden beim Laden automatisch migriert
 - Diese Datei wird im Documents-Ordner gespeichert
 
 ## Lizenz

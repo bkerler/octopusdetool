@@ -15,9 +15,18 @@ import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfoNotFoundError
 
 import requests
 import yaml
+
+try:
+    APP_TIMEZONE = ZoneInfo("Europe/Berlin")
+except ZoneInfoNotFoundError:
+    # Windows installations may not ship an IANA timezone database.
+    # Fall back to the system local timezone when available, otherwise CET.
+    APP_TIMEZONE = datetime.now().astimezone().tzinfo or timezone(timedelta(hours=1))
 
 
 def get_documents_folder() -> Path:
@@ -449,8 +458,12 @@ class OctopusGermanyClient:
                 
                 if value is not None and start_at and end_at:
                     try:
-                        start_time = datetime.fromisoformat(start_at.replace("Z", "+00:00"))
-                        end_time = datetime.fromisoformat(end_at.replace("Z", "+00:00"))
+                        start_time = normalize_datetime(
+                            datetime.fromisoformat(start_at.replace("Z", "+00:00"))
+                        )
+                        end_time = normalize_datetime(
+                            datetime.fromisoformat(end_at.replace("Z", "+00:00"))
+                        )
                         
                         all_intervals.append({
                             "start": start_time,
@@ -488,7 +501,15 @@ class OctopusGermanyClient:
 
 def format_datetime(dt: datetime) -> str:
     """Format datetime for CSV output (European format: DD.MM.YYYY HH:MM:SS)."""
+    dt = normalize_datetime(dt)
     return dt.strftime("%d.%m.%Y %H:%M:%S")
+
+
+def normalize_datetime(dt: datetime) -> datetime:
+    """Normalize datetimes to naive Europe/Berlin values for local comparisons and CSV export."""
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(APP_TIMEZONE).replace(tzinfo=None)
 
 
 def parse_date(date_str: str) -> datetime:
@@ -713,8 +734,8 @@ def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
                         end = datetime.strptime(row['end'], "%d.%m.%Y %H:%M:%S")
                     except ValueError:
                         # Fallback to ISO format for backwards compatibility
-                        start = datetime.fromisoformat(row['start'])
-                        end = datetime.fromisoformat(row['end'])
+                        start = normalize_datetime(datetime.fromisoformat(row['start']))
+                        end = normalize_datetime(datetime.fromisoformat(row['end']))
                     consumption = float(row['consumption_kwh'])
                     
                     existing_data.append({

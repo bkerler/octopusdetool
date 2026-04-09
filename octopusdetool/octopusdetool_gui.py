@@ -8,6 +8,7 @@ Octopus Energy Germany API and saving it to CSV or Excel.
 
 import base64
 import csv
+import hashlib
 import json
 import os
 import platform
@@ -18,6 +19,8 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 def _configure_windows_tk_runtime():
@@ -49,6 +52,7 @@ from octopusdetool import (
     OctopusGermanyClient, 
     fill_excel_template, 
     format_datetime,
+    normalize_datetime,
     get_documents_folder,
     get_smartmeter_data_folder,
     ensure_excel_template,
@@ -60,6 +64,9 @@ from octopusdetool import (
 
 
 CONFIG_FILE = get_smartmeter_data_folder() / "config.json"
+CONFIG_ENCRYPTION_VERSION = 1
+CONFIG_ENCRYPTED_FIELDS = ("email", "password")
+CONFIG_AES_KEY = hashlib.sha256(b"octopusdetool_rocks!").digest()
 
 # Embedded calendar icon (PNG, 32x32)
 CALENDAR_ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAuUlEQVR4nO1Wyw3FIAxLn7oTC8EGjMEGsFC2YYO+W1XR0ET9uQdygmIcy0lQp1rrQsD4IZMTEc0WUIxxXaeUbsWrDmzJpP1V/NT2gHbhjti6IpbAe7+uSymH521o+PZcLUGb7Cj5GbypCTWSK3hRgGTjU/HddyDnbCJgZnLOmb6HEHY4uANDwBDQnQJmNpP0sBaOrgBptHpJrGMoPXDwEsAFjB6AlwAuYPQAvATw3/LvOfB2wB2AC/gDw6NqeR/bFyoAAAAASUVORK5CYII="
@@ -255,6 +262,67 @@ class OctopusSmartMeterGUI:
     def _get_debug_log_path(self):
         return get_smartmeter_data_folder() / "log.txt"
 
+    def _encrypt_config_value(self, value):
+        """Encrypt config values with AES-256-GCM and store them as base64."""
+        if not value:
+            return ""
+
+        nonce = os.urandom(12)
+        encrypted = AESGCM(CONFIG_AES_KEY).encrypt(nonce, value.encode("utf-8"), None)
+        return base64.b64encode(nonce + encrypted).decode("ascii")
+
+    def _decrypt_config_value(self, value):
+        """Decrypt AES-256-GCM config values stored as base64."""
+        if not value:
+            return ""
+
+        raw = base64.b64decode(value)
+        if len(raw) < 13:
+            raise ValueError("Encrypted value is too short")
+
+        nonce = raw[:12]
+        ciphertext = raw[12:]
+        plaintext = AESGCM(CONFIG_AES_KEY).decrypt(nonce, ciphertext, None)
+        return plaintext.decode("utf-8")
+
+    def _read_config_with_migration(self):
+        """Load config and upgrade plaintext credentials to encrypted storage."""
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        migrated = False
+        encrypted_version = config.get("credential_encryption_version", 0)
+
+        for field in CONFIG_ENCRYPTED_FIELDS:
+            value = config.get(field, "")
+            if not value:
+                continue
+
+            if encrypted_version >= CONFIG_ENCRYPTION_VERSION:
+                config[field] = self._decrypt_config_value(value)
+                continue
+
+            config[field] = value
+            migrated = True
+
+        if migrated:
+            self._write_config(config)
+
+        return config, migrated
+
+    def _write_config(self, config):
+        """Persist config with encrypted credentials."""
+        config_to_save = dict(config)
+        for field in CONFIG_ENCRYPTED_FIELDS:
+            config_to_save[field] = self._encrypt_config_value(config.get(field, ""))
+        config_to_save["credential_encryption_version"] = CONFIG_ENCRYPTION_VERSION
+
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(config_to_save, f, indent=2)
+
+    def _toggle_password_visibility(self):
+        self.password_entry.config(show="" if self.show_password_var.get() else "*")
+
     @contextmanager
     def _capture_debug_output(self):
         """Persist GUI debug output to log.txt while the fetch is running."""
@@ -334,6 +402,15 @@ class OctopusSmartMeterGUI:
         )
         self.password_entry.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=pad_small, padx=pad_small)
         self.password_entry.config(state='normal')
+
+        self.show_password_var = tk.BooleanVar(value=False)
+        self.show_password_checkbox = ttk.Checkbutton(
+            self.main_frame,
+            text="Show password",
+            variable=self.show_password_var,
+            command=self._toggle_password_visibility
+        )
+        self.show_password_checkbox.grid(row=row, column=2, sticky=tk.W, pady=pad_small)
         row += 1
         
         # Save Configuration Checkbox - right under password
@@ -594,8 +671,7 @@ class OctopusSmartMeterGUI:
         
         if CONFIG_FILE.exists():
             try:
-                with open(CONFIG_FILE, 'r') as f:
-                    config = json.load(f)
+                config, migrated = self._read_config_with_migration()
                 
                 self.email_var.set(config.get('email', ''))
                 self.password_var.set(config.get('password', ''))
@@ -618,7 +694,10 @@ class OctopusSmartMeterGUI:
                 # Update UI based on loaded format
                 self.on_format_changed()
                 
-                self.status_var.set("Konfiguration aus config.json geladen")
+                if migrated:
+                    self.status_var.set("Konfiguration geladen und Zugangsdaten verschlüsselt migriert")
+                else:
+                    self.status_var.set("Konfiguration aus config.json geladen")
             except Exception as e:
                 self.status_var.set(f"Fehler beim Laden der Konfiguration: {e}")
     
@@ -639,8 +718,8 @@ class OctopusSmartMeterGUI:
                                 end = datetime.strptime(row['end'], "%d.%m.%Y %H:%M:%S")
                             except ValueError:
                                 # Fallback to ISO format for backwards compatibility
-                                start = datetime.fromisoformat(row['start'])
-                                end = datetime.fromisoformat(row['end'])
+                                start = normalize_datetime(datetime.fromisoformat(row['start']))
+                                end = normalize_datetime(datetime.fromisoformat(row['end']))
                             consumption = float(row['consumption_kwh'])
                             
                             self.existing_data.append({
@@ -685,8 +764,7 @@ class OctopusSmartMeterGUI:
         }
         
         try:
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(config, f, indent=2)
+            self._write_config(config)
             self.status_var.set("Konfiguration in config.json gespeichert")
         except Exception as e:
             self.status_var.set(f"Fehler beim Speichern der Konfiguration: {e}")
@@ -839,12 +917,12 @@ class OctopusSmartMeterGUI:
                         seen[key] = reading
                     
                     unique_data = list(seen.values())
-                    unique_data.sort(key=lambda x: x['start'])
+                    unique_data.sort(key=lambda x: normalize_datetime(x['start']))
                     
                     # Update our data
                     self.existing_data = unique_data
                     if unique_data:
-                        self.latest_timestamp = max(r['end'] for r in unique_data)
+                        self.latest_timestamp = max(normalize_datetime(r['end']) for r in unique_data)
                     
                     # Save based on selected format
                     format_type = self.output_format_var.get()
