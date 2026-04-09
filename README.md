@@ -2,6 +2,8 @@
 
 Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus Energy Deutschland** API.
 
+(c) B.Kerler (App) und B.Stahl (xlsx) 2026
+
 ## Funktionen
 
 - 📊 **Stündliche Verbrauchsdaten** - Import und Export
@@ -305,3 +307,7 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 ## Lizenz
 
 MIT Lizenz - Frei zu verwenden und zu modifizieren.
+
+## toDo
+- Die Zugangsdaten verschlüsselt in der config.json abspeichern
+- Passworteingabe maskieren
