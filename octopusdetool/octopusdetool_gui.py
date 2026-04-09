@@ -105,13 +105,14 @@ class OctopusSmartMeterGUI:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Octopus Energy Germany - Smart Meter Data Logger")
+        self.root.title("Octopus Energy Germany - Smartmeter Datenleser\n(c) B.Kerler / B.Stahl 2026")
         self.ui_scale = self._detect_ui_scale()
         self.default_font = ("Arial", self._scaled_font_size(self.BASE_FONT_SIZE))
         self.header_font = ("Arial", self._scaled_font_size(self.HEADER_FONT_SIZE), "bold")
         self.status_font = ("Arial", self._scaled_font_size(self.STATUS_FONT_SIZE), "italic")
         self.calendar_button_size = self._scaled(32)
         self._configure_window()
+        self._set_window_icon()
         
         # Style configuration
         self.style = ttk.Style()
@@ -156,6 +157,33 @@ class OctopusSmartMeterGUI:
         self.load_config()
         self.check_existing_data()
         self._fit_window_to_content()
+
+    def _set_window_icon(self):
+        """Set the application icon so Tk does not fall back to the default feather."""
+        icon_dirs = []
+        package_dir = Path(__file__).resolve().parent
+        executable_dir = Path(sys.executable).resolve().parent
+        for candidate in (package_dir, executable_dir):
+            if candidate not in icon_dirs:
+                icon_dirs.append(candidate)
+
+        try:
+            icon_ico = next((path / "octopusdetool_gui.ico" for path in icon_dirs if (path / "octopusdetool_gui.ico").exists()), None)
+            png_paths = [
+                path / filename
+                for path in icon_dirs
+                for filename in ("octopusdetool_gui-16.png", "octopusdetool_gui-32.png", "octopusdetool_gui-64.png")
+                if (path / filename).exists()
+            ]
+
+            if sys.platform == "win32" and icon_ico is not None:
+                self.root.iconbitmap(str(icon_ico))
+
+            if png_paths:
+                self.window_icons = [tk.PhotoImage(file=str(path)) for path in png_paths]
+                self.root.iconphoto(True, *self.window_icons)
+        except Exception as e:
+            print(f"Warning: Could not set application icon: {e}")
 
     def _detect_ui_scale(self):
         """Scale the GUI up on higher-resolution screens."""
@@ -370,7 +398,7 @@ class OctopusSmartMeterGUI:
         # Title
         title_label = ttk.Label(
             self.main_frame, 
-            text="Octopus Energy Deutschland\nSmart Meter Daten-Logger",
+            text="Octopus Energy Deutschland\nSmartmeter Daten-Leser\n(c) B.Kerler / B.Stahl 2026",
             style='Header.TLabel',
             justify='center'
         )
@@ -500,7 +528,7 @@ class OctopusSmartMeterGUI:
             self.calendar_icon = icon_image
             self.calendar_button_size = max(self.calendar_button_size, icon_image.width())
         except Exception as e:
-            print(f"Warning: Could not load calendar icon: {e}")
+            print(f"Fehler: Konnte das Kalender icon nicht laden: {e}")
             self.calendar_icon = None
         
         self.from_calendar_btn = tk.Button(
@@ -707,7 +735,7 @@ class OctopusSmartMeterGUI:
                 valid_formats = ['excel', 'csv', 'json', 'yaml']
                 saved_format = config.get('output_format', 'excel')
                 if saved_format not in valid_formats:
-                    print(f"[DEBUG] Invalid format in config: {saved_format}, defaulting to excel")
+                    print(f"[DEBUG] Falsches Format in config: {saved_format}, verwende stattdessen Excel")
                     saved_format = 'excel'
                 self.output_format_var.set(saved_format)
                 # Default from date: 01.01.2024 or from config
@@ -868,7 +896,8 @@ class OctopusSmartMeterGUI:
                     
                     # Check if we already have data up to yesterday
                     if self.latest_timestamp and self.latest_timestamp.date() >= (today - timedelta(days=1)).date():
-                        self._set_status(f"CSV already up to date ({self.latest_timestamp.date()}). No fetch needed.", update=True)
+                        self._set_status(f"CSV ist bereits aktuell ({self.latest_timestamp.date()}). " +
+                                         "Es werden keine Daten geladen.", update=True)
                         need_to_fetch = False
                         fetch_from = None
                         fetch_to = None
@@ -878,7 +907,7 @@ class OctopusSmartMeterGUI:
                         if fetch_from > yesterday_end:
                             fetch_from = yesterday_end
                             need_to_fetch = False
-                        self._set_status(f"Found existing data. Fetching from {fetch_from}...", update=True)
+                        self._set_status(f"Vorhandene Daten entdeckt. Lese ab {fetch_from}...", update=True)
                     
                     new_readings = []
                     

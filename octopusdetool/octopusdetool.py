@@ -621,11 +621,16 @@ def fill_excel_template(readings: list, template_path: str, output_path: str):
         shutil.copy2(template_path, backup_path)
         print(f"Sicherung erstellt: {backup_path}")
         
-        # Load the template with keep_vba=True to preserve macros
-        # Use data_only=False to preserve formulas
-        wb = openpyxl.load_workbook(template_path, data_only=False, keep_vba=True)
-        
-        print(f"Vorlage geladen: {template_path} (mit VBA/Makros erhalten)")
+        # Only preserve VBA for macro-enabled workbooks. Using keep_vba=True on
+        # a normal .xlsx can make Excel reject the saved file even though
+        # LibreOffice still opens it.
+        keep_vba = template_path_obj.suffix.lower() in {".xlsm", ".xltm"}
+        wb = openpyxl.load_workbook(template_path, data_only=False, keep_vba=keep_vba)
+
+        if keep_vba:
+            print(f"Vorlage geladen: {template_path} (mit VBA/Makros erhalten)")
+        else:
+            print(f"Vorlage geladen: {template_path}")
         
         # Get the sheets
         ws_verbrauch = wb['Verbrauch']  # Consumption sheet
