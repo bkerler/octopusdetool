@@ -1,6 +1,7 @@
 # Octopus Energy Deutschland Smart Meter Daten-Logger
 
 Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus Energy Deutschland** API.
+(c) B.Kerler (App) und B.Stahl (xlsx) 2026
 
 ## Funktionen
 
