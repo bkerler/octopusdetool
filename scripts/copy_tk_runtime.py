@@ -31,11 +31,13 @@ def main() -> int:
 
     python_root = Path(sys.base_prefix)
     dll_root = python_root / "DLLs"
+    lib_root = python_root / "Lib"
     tcl_root = python_root / "tcl"
 
     copy_file(dll_root / "_tkinter.pyd", bundle_root / "_tkinter.pyd")
     copy_file(dll_root / "tcl86t.dll", bundle_root / "tcl86t.dll")
     copy_file(dll_root / "tk86t.dll", bundle_root / "tk86t.dll")
+    copy_tree(lib_root / "tkinter", bundle_root / "tkinter")
     copy_tree(tcl_root / "tcl8.6", bundle_root / "tcl" / "tcl8.6")
     copy_tree(tcl_root / "tk8.6", bundle_root / "tcl" / "tk8.6")
 
