@@ -13,11 +13,33 @@ import os
 import platform
 import shutil
 import sys
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
 from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+
+
+def _configure_windows_tk_runtime():
+    """Point bundled Windows builds at the copied Tcl/Tk runtime."""
+    if sys.platform != "win32":
+        return
+
+    executable_dir = Path(sys.executable).resolve().parent
+    bundled_tcl_root = executable_dir / "tcl"
+    bundled_tcl_lib = bundled_tcl_root / "tcl8.6"
+    bundled_tk_lib = bundled_tcl_root / "tk8.6"
+
+    if bundled_tcl_lib.exists():
+        os.environ.setdefault("TCL_LIBRARY", str(bundled_tcl_lib))
+    if bundled_tk_lib.exists():
+        os.environ.setdefault("TK_LIBRARY", str(bundled_tk_lib))
+    if bundled_tcl_root.exists() and hasattr(os, "add_dll_directory"):
+        os.add_dll_directory(str(executable_dir))
+
+
+_configure_windows_tk_runtime()
+
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
 
 # Import from the same package
 from octopusdetool import (

@@ -32,6 +32,7 @@ requires = [
 test_requires = [
     "pytest",
 ]
+include_frameworks = ["tkinter"]
 
 [tool.briefcase.app.octopusdetool.macOS]
 universal_build = true
