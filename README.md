@@ -213,13 +213,15 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 - **Eingabefelder** für E-Mail und Passwort
 - **Passwortanzeige umschaltbar** - Passwort ist standardmäßig maskiert; `Show password` blendet es ein
 - **Ausgabeformatauswahl**: Excel (Standard), CSV, JSON oder YAML
-- **Excel-Dateiauswahl** mit Dateibrowser
+- **Excel-Dateiauswahl** mit Speichern-unter-Dialog für neue oder bestehende `.xlsx`-Dateien
+- **Gezielter Excel-Speicherort** - Die Excel-Datei wird immer genau unter dem im Eingabefeld angegebenen Pfad gespeichert
 - **Datumsbereichsauswahl** mit Kalender-Buttons
 - **Fortschrittsanzeige** - Zeigt "Empfange Daten... X Einträge (Seite Y)"
 - **Konfigurationsspeicherung** - Speichert E-Mail/Passwort verschlüsselt in `config.json` (AES-256-GCM, Base64)
 - **Debug-Ausgabe** - Wenn aktiviert, wird der vollständige GUI-Debug-Log nach `~/Documents/smartmeter_data/log.txt` geschrieben
 - **Automatisches Laden** - Lädt gespeicherte Konfiguration beim Start
 - **Automatische Migration** - Bereits vorhandene Klartext-Zugangsdaten in `config.json` werden beim Laden automatisch verschlüsselt
+- **Automatische Excel-Vorlage** - Existiert die angegebene Excel-Datei noch nicht, wird die mitgelieferte Blanko-Vorlage unter genau diesem Dateinamen erstellt
 
 ### Screenshot
 
@@ -237,7 +239,7 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 ├─────────────────────────────────────────────┤
 │  Ausgabeoptionen                            │
 │  Format: (*) Excel  ( ) CSV  ( ) JSON/YAML  │
-│  Excel-Vorlage: [____________] [Durchsuchen]│
+│  Excel-Vorlage: [____________] [Speichern unter]│
 ├─────────────────────────────────────────────┤
 │  Datumsbereich                              │
 │  Von: [01.01.2024    ] [📅]                 │

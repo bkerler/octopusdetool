@@ -67,6 +67,7 @@ CONFIG_FILE = get_smartmeter_data_folder() / "config.json"
 CONFIG_ENCRYPTION_VERSION = 1
 CONFIG_ENCRYPTED_FIELDS = ("email", "password")
 CONFIG_AES_KEY = hashlib.sha256(b"octopusdetool_rocks!").digest()
+CONFIG_SAVE_FLAG = "save_config_enabled"
 
 # Embedded calendar icon (PNG, 32x32)
 CALENDAR_ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAuUlEQVR4nO1Wyw3FIAxLn7oTC8EGjMEGsFC2YYO+W1XR0ET9uQdygmIcy0lQp1rrQsD4IZMTEc0WUIxxXaeUbsWrDmzJpP1V/NT2gHbhjti6IpbAe7+uSymH521o+PZcLUGb7Cj5GbypCTWSK3hRgGTjU/HddyDnbCJgZnLOmb6HEHY4uANDwBDQnQJmNpP0sBaOrgBptHpJrGMoPXDwEsAFjB6AlwAuYPQAvATw3/LvOfB2wB2AC/gDw6NqeR/bFyoAAAAASUVORK5CYII="
@@ -469,9 +470,11 @@ class OctopusSmartMeterGUI:
         self.excel_var = tk.StringVar(value=str(get_default_excel_path()))
         self.excel_entry = ttk.Entry(excel_frame, textvariable=self.excel_var, width=50)
         self.excel_entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        self.excel_entry.bind("<FocusOut>", self._normalize_excel_entry)
+        self.excel_entry.bind("<Return>", self._normalize_excel_entry)
         
         self.browse_btn = ttk.Button(
-            excel_frame, text="Durchsuchen...", command=self.browse_excel, width=10
+            excel_frame, text="Speichern unter", command=self.browse_excel, width=14
         )
         self.browse_btn.grid(row=0, column=1, padx=(pad_small, 0))
         
@@ -562,13 +565,31 @@ class OctopusSmartMeterGUI:
             self.browse_btn.config(state='disabled')
     
     def browse_excel(self):
-        """Open file dialog to select Excel file."""
-        filename = filedialog.askopenfilename(
-            title="Excel-Vorlage auswählen",
+        """Open a save dialog for the Excel output file."""
+        current_path = self._get_normalized_excel_path()
+        filename = filedialog.asksaveasfilename(
+            title="Excel-Datei speichern unter",
+            defaultextension=".xlsx",
+            initialdir=str(current_path.parent),
+            initialfile=current_path.name,
             filetypes=[("Excel-Dateien", "*.xlsx"), ("Alle Dateien", "*.*")]
         )
         if filename:
-            self.excel_var.set(filename)
+            self.excel_var.set(str(self._ensure_excel_suffix(Path(filename))))
+
+    def _ensure_excel_suffix(self, path):
+        if path.suffix.lower() == ".xlsx":
+            return path
+        return path.with_suffix(".xlsx")
+
+    def _get_normalized_excel_path(self):
+        raw_value = self.excel_var.get().strip()
+        if not raw_value:
+            return get_default_excel_path()
+        return self._ensure_excel_suffix(Path(raw_value).expanduser())
+
+    def _normalize_excel_entry(self, event=None):
+        self.excel_var.set(str(self._get_normalized_excel_path()))
     
     def show_calendar(self, target_var):
         """Show a simple calendar dialog."""
@@ -672,10 +693,16 @@ class OctopusSmartMeterGUI:
         if CONFIG_FILE.exists():
             try:
                 config, migrated = self._read_config_with_migration()
+                config_saving_enabled = config.get(CONFIG_SAVE_FLAG, 'excel_file' in config)
                 
                 self.email_var.set(config.get('email', ''))
                 self.password_var.set(config.get('password', ''))
-                self.excel_var.set(config.get('excel_file', str(get_default_excel_path())))
+                if config_saving_enabled:
+                    self.excel_var.set(config.get('excel_file', str(get_default_excel_path())))
+                    self.save_config_var.set(True)
+                else:
+                    self.excel_var.set(str(get_default_excel_path()))
+                    self.save_config_var.set(False)
                 # Validate output format, default to excel if invalid
                 valid_formats = ['excel', 'csv', 'json', 'yaml']
                 saved_format = config.get('output_format', 'excel')
@@ -757,11 +784,14 @@ class OctopusSmartMeterGUI:
         config = {
             'email': self.email_var.get(),
             'password': self.password_var.get(),
-            'excel_file': self.excel_var.get(),
             'output_format': self.output_format_var.get(),
             'from_date': self.from_date_var.get(),  # Store the from date
             'debug': self.debug_var.get(),
+            CONFIG_SAVE_FLAG: True,
         }
+
+        if self.save_config_var.get():
+            config['excel_file'] = str(self._get_normalized_excel_path())
         
         try:
             self._write_config(config)
@@ -781,8 +811,10 @@ class OctopusSmartMeterGUI:
         
         format_type = self.output_format_var.get()
         if format_type == "excel" and not self.excel_var.get():
-            messagebox.showerror("Fehler", "Bitte wählen Sie eine Excel-Vorlagendatei aus!")
+            messagebox.showerror("Fehler", "Bitte wählen Sie eine Excel-Datei aus!")
             return False
+        if format_type == "excel":
+            self._normalize_excel_entry()
         
         try:
             from_date = datetime.strptime(self.from_date_var.get(), "%d.%m.%Y")
@@ -942,8 +974,8 @@ class OctopusSmartMeterGUI:
                                     reading['consumption_kwh']
                                 ])
                         
-                        excel_path = Path(self.excel_var.get()).resolve()
-                        self._set_status("Excel-Vorlage wird gefüllt...", update=True)
+                        excel_path = self._get_normalized_excel_path().resolve()
+                        self._set_status("Excel-Datei wird gefüllt...", update=True)
                         
                         success = fill_excel_template(unique_data, str(excel_path), str(excel_path))
                         if success:

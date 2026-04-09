@@ -31,6 +31,11 @@ except ZoneInfoNotFoundError:
 EXCEL_TEMPLATE_FILENAME = "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
 
 
+def get_bundled_excel_template_path() -> Path:
+    """Get the bundled blank Excel template path."""
+    return Path(__file__).parent / EXCEL_TEMPLATE_FILENAME
+
+
 def get_documents_folder() -> Path:
     """Get the user's Documents folder path (cross-platform)."""
     system = platform.system()
@@ -63,7 +68,7 @@ def ensure_excel_template():
     smartmeter_folder.mkdir(parents=True, exist_ok=True)
     
     # Source: template in octopusdetool package directory
-    source = Path(__file__).parent / EXCEL_TEMPLATE_FILENAME
+    source = get_bundled_excel_template_path()
     # Target: Documents/smartmeter_data/
     target = smartmeter_folder / EXCEL_TEMPLATE_FILENAME
     
@@ -80,12 +85,8 @@ def get_default_output_path() -> Path:
 
 
 def get_default_excel_path() -> Path:
-    """Get the default Excel template path."""
-    template = get_smartmeter_data_folder() / EXCEL_TEMPLATE_FILENAME
-    if template.exists():
-        return template
-    # Fallback to package directory
-    return Path(__file__).parent / EXCEL_TEMPLATE_FILENAME
+    """Get the default Excel output path shown in the UI/CLI."""
+    return get_smartmeter_data_folder() / EXCEL_TEMPLATE_FILENAME
 
 
 # German Octopus Energy API endpoints
@@ -599,7 +600,10 @@ def fill_excel_template(readings: list, template_path: str, output_path: str):
     
     try:
         template_path_obj = Path(template_path)
-        bundled_template = Path(__file__).parent / EXCEL_TEMPLATE_FILENAME
+        output_path_obj = Path(output_path)
+        bundled_template = get_bundled_excel_template_path()
+
+        output_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
         if not template_path_obj.exists() and bundled_template.exists():
             template_path_obj.parent.mkdir(parents=True, exist_ok=True)
@@ -610,6 +614,7 @@ def fill_excel_template(readings: list, template_path: str, output_path: str):
             return False
 
         template_path = str(template_path_obj)
+        output_path = str(output_path_obj)
 
         # Create backup of original file
         backup_path = template_path + ".backup"
