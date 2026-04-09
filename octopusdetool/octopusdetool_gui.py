@@ -45,8 +45,8 @@ class OctopusSmartMeterGUI:
         self.root = root
         self.root.title("Octopus Energy Germany - Smart Meter Data Logger")
         # Set size large enough to show all elements without scrolling
-        self.root.geometry("1600x950")
-        self.root.minsize(1400, 900)
+        self.root.geometry("700x600")
+        self.root.minsize(700, 600)
         self.root.resizable(True, True)
         
         # Style configuration
