@@ -406,7 +406,7 @@ class OctopusSmartMeterGUI:
         self.show_password_var = tk.BooleanVar(value=False)
         self.show_password_checkbox = ttk.Checkbutton(
             self.main_frame,
-            text="Show password",
+            text="Passwort anzeigen",
             variable=self.show_password_var,
             command=self._toggle_password_visibility
         )
@@ -426,7 +426,7 @@ class OctopusSmartMeterGUI:
         self.debug_var = tk.BooleanVar(value=False)
         self.debug_check = ttk.Checkbutton(
             self.main_frame, 
-            text="Debug-Ausgabe aktivieren (zeigt alle API-Anfragen)",
+            text="Debug-Ausgabe aktivieren (zeigt alle API-Anfragen, wird in Dokumente/smartmeter_daten/log.txt gespeichert)",
             variable=self.debug_var
         )
         self.debug_check.grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=pad_small)

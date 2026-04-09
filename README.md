@@ -228,7 +228,7 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 ├─────────────────────────────────────────────┤
 │  E-Mail:        [____________________]      │
 │  Passwort:      [***************     ] [ ]  │
-│                               Show password │
+│                           Passwort anzeigen │
 │                                             │
 │  [✓] Konfiguration in config.json speichern │
 │  [ ] Debug-Ausgabe aktivieren               │

@@ -28,6 +28,8 @@ except ZoneInfoNotFoundError:
     # Fall back to the system local timezone when available, otherwise CET.
     APP_TIMEZONE = datetime.now().astimezone().tzinfo or timezone(timedelta(hours=1))
 
+EXCEL_TEMPLATE_FILENAME = "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+
 
 def get_documents_folder() -> Path:
     """Get the user's Documents folder path (cross-platform)."""
@@ -61,9 +63,9 @@ def ensure_excel_template():
     smartmeter_folder.mkdir(parents=True, exist_ok=True)
     
     # Source: template in octopusdetool package directory
-    source = Path(__file__).parent / "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+    source = Path(__file__).parent / EXCEL_TEMPLATE_FILENAME
     # Target: Documents/smartmeter_data/
-    target = smartmeter_folder / "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+    target = smartmeter_folder / EXCEL_TEMPLATE_FILENAME
     
     if source.exists() and not target.exists():
         shutil.copy2(source, target)
@@ -79,11 +81,11 @@ def get_default_output_path() -> Path:
 
 def get_default_excel_path() -> Path:
     """Get the default Excel template path."""
-    template = get_smartmeter_data_folder() / "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+    template = get_smartmeter_data_folder() / EXCEL_TEMPLATE_FILENAME
     if template.exists():
         return template
     # Fallback to package directory
-    return Path(__file__).parent / "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+    return Path(__file__).parent / EXCEL_TEMPLATE_FILENAME
 
 
 # German Octopus Energy API endpoints
@@ -596,8 +598,20 @@ def fill_excel_template(readings: list, template_path: str, output_path: str):
         return False
     
     try:
+        template_path_obj = Path(template_path)
+        bundled_template = Path(__file__).parent / EXCEL_TEMPLATE_FILENAME
+
+        if not template_path_obj.exists() and bundled_template.exists():
+            template_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(bundled_template, template_path_obj)
+            print(f"Excel-Vorlage aus dem Paket kopiert nach: {template_path_obj}")
+        elif not template_path_obj.exists():
+            print(f"Fehler: Excel-Vorlage nicht gefunden: {template_path_obj}")
+            return False
+
+        template_path = str(template_path_obj)
+
         # Create backup of original file
-        import shutil
         backup_path = template_path + ".backup"
         shutil.copy2(template_path, backup_path)
         print(f"Sicherung erstellt: {backup_path}")
