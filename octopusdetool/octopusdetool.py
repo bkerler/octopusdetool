@@ -28,7 +28,7 @@ except ZoneInfoNotFoundError:
     # Fall back to the system local timezone when available, otherwise CET.
     APP_TIMEZONE = datetime.now().astimezone().tzinfo or timezone(timedelta(hours=1))
 
-EXCEL_TEMPLATE_FILENAME = "stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx"
+EXCEL_TEMPLATE_FILENAME = "smartmeter_daten.xlsx"
 
 
 def get_bundled_excel_template_path() -> Path:

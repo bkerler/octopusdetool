@@ -4,11 +4,26 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 
 (c) B.Kerler (App) und B.Stahl (xlsx) 2026
 
-<img width="578" height="495" alt="image" src="https://github.com/user-attachments/assets/860ed85e-5555-4b84-a1ec-4787c903ac1a" />
+## GUI-Version
 
+### Funktionen
+
+- **Eingabefelder** für E-Mail und Passwort
+- **Passwortanzeige umschaltbar** - Passwort ist standardmäßig maskiert; `Show password` blendet es ein
+- **Ausgabeformatauswahl**: Excel (Standard), CSV, JSON oder YAML
+- **Excel-Dateiauswahl** mit Speichern-unter-Dialog für neue oder bestehende `.xlsx`-Dateien
+- **Gezielter Excel-Speicherort** - Die Excel-Datei wird immer genau unter dem im Eingabefeld angegebenen Pfad gespeichert
+- **Datumsbereichsauswahl** mit Kalender-Buttons
+- **Fortschrittsanzeige** - Zeigt "Empfange Daten... X Einträge (Seite Y)"
+- **Konfigurationsspeicherung** - Speichert E-Mail/Passwort verschlüsselt in `config.json` (AES-256-GCM, Base64)
+- **Debug-Ausgabe** - Wenn aktiviert, wird der vollständige GUI-Debug-Log nach `~/Documents/smartmeter_data/log.txt` geschrieben
+- **Automatisches Laden** - Lädt gespeicherte Konfiguration beim Start
+- **Automatische Migration** - Bereits vorhandene Klartext-Zugangsdaten in `config.json` werden beim Laden automatisch verschlüsselt
+- **Automatische Excel-Vorlage** - Existiert die angegebene Excel-Datei noch nicht, wird die mitgelieferte Blanko-Vorlage unter genau diesem Dateinamen erstellt
+
+### Screenshot
 
 ## Funktionen
-
 - 📊 **Stündliche Verbrauchsdaten** - Import und Export
 - 🔄 **Inkrementelle Aktualisierung** - Nur neue Daten abrufen
 - 📁 **Mehrere Ausgabeformate** - CSV, JSON, YAML oder Excel
@@ -110,7 +125,7 @@ python -m octopusdetool.octopusdetool \
 python -m octopusdetool.octopusdetool \
     --email user@example.com \
     --password ihr_passwort \
-    --fill-excel ~/Documents/smartmeter_data/stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx
+    --fill-excel ~/Documents/smartmeter_data/smartmeter_daten.xlsx
 ```
 
 #### Debug-Modus aktivieren
@@ -148,7 +163,7 @@ Die Daten werden in `~/Documents/smartmeter_data/` gespeichert:
 ├── consumption.json             # Alle Verbrauchsdaten (JSON)
 ├── consumption.yaml             # Alle Verbrauchsdaten (YAML)
 ├── log.txt                      # GUI-Debug-Log mit API-Requests/Responses, Statusmeldungen und Fehlern
-├── stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx  # Excel-Vorlage
+├── smartmeter_daten.xlsx  # Excel-Vorlage
 └── config.json                  # GUI-Konfiguration (optional)
 ```
 
@@ -204,52 +219,6 @@ Das Tool füllt die deutsche Stromtarif-Vorlage:
 - **Spalte B (Stunde)**: Formelbasiert (0-23)
 - **Spalte C (Verbrauch)**: Wird mit Ihren Smart Meter Daten gefüllt
 - **Einstellungen B5/B6**: Zeitraum wird automatisch aktualisiert
-
-## GUI-Version
-
-Die GUI bietet eine benutzerfreundliche Oberfläche:
-
-### Funktionen
-
-- **Eingabefelder** für E-Mail und Passwort
-- **Passwortanzeige umschaltbar** - Passwort ist standardmäßig maskiert; `Show password` blendet es ein
-- **Ausgabeformatauswahl**: Excel (Standard), CSV, JSON oder YAML
-- **Excel-Dateiauswahl** mit Speichern-unter-Dialog für neue oder bestehende `.xlsx`-Dateien
-- **Gezielter Excel-Speicherort** - Die Excel-Datei wird immer genau unter dem im Eingabefeld angegebenen Pfad gespeichert
-- **Datumsbereichsauswahl** mit Kalender-Buttons
-- **Fortschrittsanzeige** - Zeigt "Empfange Daten... X Einträge (Seite Y)"
-- **Konfigurationsspeicherung** - Speichert E-Mail/Passwort verschlüsselt in `config.json` (AES-256-GCM, Base64)
-- **Debug-Ausgabe** - Wenn aktiviert, wird der vollständige GUI-Debug-Log nach `~/Documents/smartmeter_data/log.txt` geschrieben
-- **Automatisches Laden** - Lädt gespeicherte Konfiguration beim Start
-- **Automatische Migration** - Bereits vorhandene Klartext-Zugangsdaten in `config.json` werden beim Laden automatisch verschlüsselt
-- **Automatische Excel-Vorlage** - Existiert die angegebene Excel-Datei noch nicht, wird die mitgelieferte Blanko-Vorlage unter genau diesem Dateinamen erstellt
-
-### Screenshot
-
-```
-┌─────────────────────────────────────────────┐
-│  Octopus Energy Deutschland                 │
-│  Smart Meter Daten-Logger                   │
-├─────────────────────────────────────────────┤
-│  E-Mail:        [____________________]      │
-│  Passwort:      [***************     ] [ ]  │
-│                           Passwort anzeigen │
-│                                             │
-│  [✓] Konfiguration in config.json speichern │
-│  [ ] Debug-Ausgabe aktivieren               │
-├─────────────────────────────────────────────┤
-│  Ausgabeoptionen                            │
-│  Format: (*) Excel  ( ) CSV  ( ) JSON/YAML  │
-│  Excel-Vorlage: [____________] [Speichern unter]│
-├─────────────────────────────────────────────┤
-│  Datumsbereich                              │
-│  Von: [01.01.2024    ] [📅]                 │
-│  Bis: [07.01.2026    ] [📅]                 │
-├─────────────────────────────────────────────┤
-│  Bereit                                     │
-│  [Daten vom Server abrufen]                 │
-└─────────────────────────────────────────────┘
-```
 
 ## API-Hinweise
 

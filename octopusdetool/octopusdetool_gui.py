@@ -68,6 +68,12 @@ CONFIG_ENCRYPTION_VERSION = 1
 CONFIG_ENCRYPTED_FIELDS = ("email", "password")
 CONFIG_AES_KEY = hashlib.sha256(b"octopusdetool_rocks!").digest()
 CONFIG_SAVE_FLAG = "save_config_enabled"
+OUTPUT_EXTENSIONS = {
+    "excel": ".xlsx",
+    "csv": ".csv",
+    "json": ".json",
+    "yaml": ".yaml",
+}
 
 # Embedded calendar icon (PNG, 32x32)
 CALENDAR_ICON_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAuUlEQVR4nO1Wyw3FIAxLn7oTC8EGjMEGsFC2YYO+W1XR0ET9uQdygmIcy0lQp1rrQsD4IZMTEc0WUIxxXaeUbsWrDmzJpP1V/NT2gHbhjti6IpbAe7+uSymH521o+PZcLUGb7Cj5GbypCTWSK3hRgGTjU/HddyDnbCJgZnLOmb6HEHY4uANDwBDQnQJmNpP0sBaOrgBptHpJrGMoPXDwEsAFjB6AlwAuYPQAvATw3/LvOfB2wB2AC/gDw6NqeR/bFyoAAAAASUVORK5CYII="
@@ -102,26 +108,45 @@ class OctopusSmartMeterGUI:
     BASE_CALENDAR_WIDTH = 300
     BASE_CALENDAR_HEIGHT = 280
     MAX_UI_SCALE = 1.5
+    COLOR_BG = "#f3f7fb"
+    COLOR_SURFACE = "#ffffff"
+    COLOR_SURFACE_ALT = "#eef4f9"
+    COLOR_BORDER = "#d7e2ec"
+    COLOR_TEXT = "#152230"
+    COLOR_MUTED = "#61758a"
+    COLOR_ACCENT = "#0f766e"
+    COLOR_ACCENT_HOVER = "#115e59"
+    COLOR_ACCENT_SOFT = "#d7f3ee"
+    COLOR_WARNING = "#f59e0b"
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Octopus Energy Germany - Smartmeter Datenleser\n(c) B.Kerler / B.Stahl 2026")
+        self.root.title("Octopus Energy Germany - Smartmeter Datenexport")
         self.ui_scale = self._detect_ui_scale()
-        self.default_font = ("Arial", self._scaled_font_size(self.BASE_FONT_SIZE))
-        self.header_font = ("Arial", self._scaled_font_size(self.HEADER_FONT_SIZE), "bold")
-        self.status_font = ("Arial", self._scaled_font_size(self.STATUS_FONT_SIZE), "italic")
+        self.font_family = "Segoe UI"
+        self.default_font = (self.font_family, self._scaled_font_size(self.BASE_FONT_SIZE))
+        self.header_font = (self.font_family, self._scaled_font_size(self.HEADER_FONT_SIZE + 4), "bold")
+        self.section_font = (self.font_family, self._scaled_font_size(self.HEADER_FONT_SIZE), "bold")
+        self.status_font = (self.font_family, self._scaled_font_size(self.STATUS_FONT_SIZE))
+        self.caption_font = (self.font_family, self._scaled_font_size(self.STATUS_FONT_SIZE))
         self.calendar_button_size = self._scaled(32)
         self._configure_window()
         self._set_window_icon()
+        self.root.configure(background=self.COLOR_BG)
         
         # Style configuration
         self.style = ttk.Style()
         self._configure_styles()
         
         # Create a canvas with scrollbar for resizable content
-        self.canvas = tk.Canvas(root, background='#f0f0f0')
-        self.scrollbar = ttk.Scrollbar(root, orient="vertical", command=self.canvas.yview)
-        self.main_frame = ttk.Frame(self.canvas, padding=self._scaled(self.BASE_PADDING))
+        self.canvas = tk.Canvas(
+            root,
+            background=self.COLOR_BG,
+            highlightthickness=0,
+            borderwidth=0
+        )
+        self.scrollbar = ttk.Scrollbar(root, orient="vertical", command=self.canvas.yview, style="Vertical.TScrollbar")
+        self.main_frame = ttk.Frame(self.canvas, padding=self._scaled(self.BASE_PADDING), style="App.TFrame")
         
         self.main_frame.bind(
             "<Configure>",
@@ -151,6 +176,7 @@ class OctopusSmartMeterGUI:
         ensure_excel_template()
         self.csv_path = get_default_output_path()
         self.excel_path = get_default_excel_path()
+        self.last_output_format = "excel"
         
         self.create_widgets()
         self._fit_window_to_content()
@@ -252,12 +278,17 @@ class OctopusSmartMeterGUI:
         self.root.minsize(window_width, window_height)
 
     def _configure_styles(self):
-        """Apply consistent font scaling across ttk widgets."""
+        """Apply a more modern visual system across ttk widgets."""
+        try:
+            self.style.theme_use("clam")
+        except tk.TclError:
+            pass
+
         named_font_overrides = {
             "TkDefaultFont": self.default_font,
             "TkTextFont": self.default_font,
             "TkMenuFont": self.default_font,
-            "TkHeadingFont": self.header_font,
+            "TkHeadingFont": self.section_font,
             "TkCaptionFont": self.default_font,
         }
         for font_name, font_config in named_font_overrides.items():
@@ -271,16 +302,120 @@ class OctopusSmartMeterGUI:
             except tk.TclError:
                 continue
 
-        self.style.configure('TFrame', background='#f0f0f0')
-        self.style.configure('TLabel', background='#f0f0f0', font=self.default_font)
-        self.style.configure('TButton', font=self.default_font)
-        self.style.configure('TCheckbutton', background='#f0f0f0', font=self.default_font)
-        self.style.configure('TEntry', font=self.default_font)
-        self.style.configure('TCombobox', font=self.default_font)
-        self.style.configure('TSpinbox', font=self.default_font)
-        self.style.configure('TLabelframe', background='#f0f0f0')
-        self.style.configure('TLabelframe.Label', background='#f0f0f0', font=self.default_font)
-        self.style.configure('Header.TLabel', font=self.header_font)
+        self.style.configure(".", background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=self.default_font)
+        self.style.configure("App.TFrame", background=self.COLOR_BG)
+        self.style.configure("Surface.TFrame", background=self.COLOR_SURFACE)
+        self.style.configure("Hero.TFrame", background=self.COLOR_SURFACE)
+        self.style.configure("TFrame", background=self.COLOR_BG)
+        self.style.configure("TLabel", background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=self.default_font)
+        self.style.configure("Surface.TLabel", background=self.COLOR_SURFACE, foreground=self.COLOR_TEXT, font=self.default_font)
+        self.style.configure("Muted.TLabel", background=self.COLOR_SURFACE, foreground=self.COLOR_MUTED, font=self.caption_font)
+        self.style.configure("HeroBadge.TLabel", background=self.COLOR_ACCENT_SOFT, foreground=self.COLOR_ACCENT, font=self.caption_font)
+        self.style.configure("Header.TLabel", background=self.COLOR_SURFACE, foreground=self.COLOR_TEXT, font=self.header_font)
+        self.style.configure("Section.TLabel", background=self.COLOR_SURFACE, foreground=self.COLOR_TEXT, font=self.section_font)
+        self.style.configure("Status.TLabel", background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_ACCENT, font=self.status_font)
+
+        self.style.configure(
+            "TButton",
+            font=self.default_font,
+            padding=(14, 9),
+            borderwidth=0,
+            relief="flat",
+            background=self.COLOR_SURFACE_ALT,
+            foreground=self.COLOR_TEXT,
+        )
+        self.style.map(
+            "TButton",
+            background=[("active", self.COLOR_BORDER)],
+            foreground=[("disabled", self.COLOR_MUTED)],
+        )
+        self.style.configure(
+            "Primary.TButton",
+            background=self.COLOR_ACCENT,
+            foreground="#ffffff",
+            padding=(18, 11),
+            font=self.section_font,
+        )
+        self.style.map(
+            "Primary.TButton",
+            background=[("active", self.COLOR_ACCENT_HOVER), ("disabled", self.COLOR_BORDER)],
+            foreground=[("disabled", "#ffffff")],
+        )
+
+        field_padding = (10, 8)
+        self.style.configure(
+            "TEntry",
+            fieldbackground=self.COLOR_SURFACE,
+            foreground=self.COLOR_TEXT,
+            bordercolor=self.COLOR_BORDER,
+            lightcolor=self.COLOR_BORDER,
+            darkcolor=self.COLOR_BORDER,
+            insertcolor=self.COLOR_TEXT,
+            padding=field_padding,
+        )
+        self.style.configure(
+            "TCombobox",
+            fieldbackground=self.COLOR_SURFACE,
+            foreground=self.COLOR_TEXT,
+            bordercolor=self.COLOR_BORDER,
+            lightcolor=self.COLOR_BORDER,
+            darkcolor=self.COLOR_BORDER,
+            arrowsize=self._scaled(14),
+            padding=field_padding,
+        )
+        self.style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", self.COLOR_SURFACE)],
+            background=[("readonly", self.COLOR_SURFACE)],
+            foreground=[("readonly", self.COLOR_TEXT)],
+        )
+        self.style.configure("TSpinbox", arrowsize=self._scaled(14), padding=(8, 6))
+        self.style.configure(
+            "TCheckbutton",
+            background=self.COLOR_SURFACE,
+            foreground=self.COLOR_TEXT,
+            font=self.default_font,
+        )
+        self.style.map(
+            "TCheckbutton",
+            background=[("active", self.COLOR_SURFACE)],
+            foreground=[("disabled", self.COLOR_MUTED)],
+        )
+
+        self.style.configure(
+            "Card.TLabelframe",
+            background=self.COLOR_SURFACE,
+            bordercolor=self.COLOR_BORDER,
+            lightcolor=self.COLOR_BORDER,
+            darkcolor=self.COLOR_BORDER,
+            relief="solid",
+            borderwidth=1,
+        )
+        self.style.configure(
+            "Card.TLabelframe.Label",
+            background=self.COLOR_SURFACE,
+            foreground=self.COLOR_TEXT,
+            font=self.section_font,
+        )
+        self.style.configure(
+            "TSeparator",
+            background=self.COLOR_BORDER,
+        )
+        self.style.configure(
+            "Vertical.TScrollbar",
+            background=self.COLOR_SURFACE_ALT,
+            troughcolor=self.COLOR_BG,
+            bordercolor=self.COLOR_BG,
+            arrowcolor=self.COLOR_MUTED,
+        )
+        self.style.configure(
+            "Modern.Horizontal.TProgressbar",
+            troughcolor=self.COLOR_SURFACE_ALT,
+            background=self.COLOR_ACCENT,
+            bordercolor=self.COLOR_SURFACE_ALT,
+            lightcolor=self.COLOR_ACCENT,
+            darkcolor=self.COLOR_ACCENT,
+        )
     
     def _on_mousewheel(self, event):
         self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
@@ -391,135 +526,153 @@ class OctopusSmartMeterGUI:
     def create_widgets(self):
         """Create all GUI widgets."""
         row = 0
-        pad_small = self._scaled(5)
-        pad_medium = self._scaled(10)
-        pad_large = self._scaled(20)
-        
-        # Title
-        title_label = ttk.Label(
-            self.main_frame, 
-            text="Octopus Energy Deutschland\nSmartmeter Daten-Leser\n(c) B.Kerler / B.Stahl 2026",
-            style='Header.TLabel',
-            justify='center'
-        )
-        title_label.grid(row=row, column=0, columnspan=3, pady=(0, pad_large))
+        pad_small = self._scaled(4)
+        pad_medium = self._scaled(8)
+        pad_large = self._scaled(14)
+        pad_xlarge = self._scaled(18)
+
+        hero_frame = ttk.Frame(self.main_frame, style="Hero.TFrame", padding=(pad_large, pad_large, pad_large, pad_xlarge))
+        hero_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, pad_medium))
+        hero_frame.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            hero_frame,
+            text="Octopus Energy Deutschland Smartmeter Datenexport",
+            style="Header.TLabel"
+        ).grid(row=1, column=0, sticky=tk.W)
+        ttk.Label(
+            hero_frame,
+            text="(c) B.Kerler / S. Stahl 2026",
+            style="Muted.TLabel",
+            wraplength=self._scaled(560),
+            justify=tk.LEFT
+        ).grid(row=2, column=0, sticky=tk.W, pady=(pad_small, 0))
         row += 1
-        
-        # Separator
-        ttk.Separator(self.main_frame, orient='horizontal').grid(
-            row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, pad_medium)
+
+        account_frame = ttk.LabelFrame(
+            self.main_frame,
+            text="Zugang & Einstellungen",
+            style="Card.TLabelframe",
+            padding=pad_large
         )
+        account_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, pad_small))
+        account_frame.columnconfigure(1, weight=1)
         row += 1
-        
-        # Email
-        ttk.Label(self.main_frame, text="E-Mail:").grid(
-            row=row, column=0, sticky=tk.W, pady=pad_small
+
+        account_row = 0
+        ttk.Label(account_frame, text="E-Mail:", style="Surface.TLabel").grid(
+            row=account_row, column=0, sticky=tk.W, pady=pad_small
         )
         self.email_var = tk.StringVar()
-        self.email_entry = ttk.Entry(self.main_frame, textvariable=self.email_var, width=60)
-        self.email_entry.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=pad_small, padx=pad_small)
+        self.email_entry = ttk.Entry(account_frame, textvariable=self.email_var, width=60)
+        self.email_entry.grid(row=account_row, column=1, sticky=(tk.W, tk.E), pady=pad_small, padx=(pad_medium, 0))
         self.email_entry.config(state='normal')
-        row += 1
-        
-        # Password
-        ttk.Label(self.main_frame, text="Passwort:").grid(
-            row=row, column=0, sticky=tk.W, pady=pad_small
+        account_row += 1
+
+        ttk.Label(account_frame, text="Passwort:", style="Surface.TLabel").grid(
+            row=account_row, column=0, sticky=tk.W, pady=pad_small
         )
         self.password_var = tk.StringVar()
         self.password_entry = ttk.Entry(
-            self.main_frame, textvariable=self.password_var, width=60, show="*"
+            account_frame, textvariable=self.password_var, width=60, show="*"
         )
-        self.password_entry.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=pad_small, padx=pad_small)
+        self.password_entry.grid(row=account_row, column=1, sticky=(tk.W, tk.E), pady=pad_small, padx=(pad_medium, 0))
         self.password_entry.config(state='normal')
 
         self.show_password_var = tk.BooleanVar(value=False)
         self.show_password_checkbox = ttk.Checkbutton(
-            self.main_frame,
+            account_frame,
             text="Passwort anzeigen",
             variable=self.show_password_var,
             command=self._toggle_password_visibility
         )
-        self.show_password_checkbox.grid(row=row, column=2, sticky=tk.W, pady=pad_small)
-        row += 1
-        
-        # Save Configuration Checkbox - right under password
+        self.show_password_checkbox.grid(row=account_row, column=2, sticky=tk.W, pady=pad_small, padx=(pad_medium, 0))
+        account_row += 1
+
         self.save_config_var = tk.BooleanVar(value=False)
         self.save_config_checkbox = ttk.Checkbutton(
-            self.main_frame, text="Konfiguration in config.json speichern",
+            account_frame, text="Konfiguration in config.json speichern",
             variable=self.save_config_var
         )
-        self.save_config_checkbox.grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=pad_small)
-        row += 1
-        
-        # Debug Mode Checkbox - right under save config
+        self.save_config_checkbox.grid(row=account_row, column=0, columnspan=3, sticky=tk.W, pady=(pad_small, 0))
+        account_row += 1
+
         self.debug_var = tk.BooleanVar(value=False)
         self.debug_check = ttk.Checkbutton(
-            self.main_frame, 
+            account_frame,
             text="Debug-Ausgabe aktivieren (zeigt alle API-Anfragen, wird in Dokumente/smartmeter_daten/log.txt gespeichert)",
             variable=self.debug_var
         )
-        self.debug_check.grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=pad_small)
-        row += 1
-        
-        # Separator
-        ttk.Separator(self.main_frame, orient='horizontal').grid(
-            row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=pad_medium
+        self.debug_check.grid(row=account_row, column=0, columnspan=3, sticky=tk.W, pady=(pad_small, 0))
+
+        output_frame = ttk.LabelFrame(
+            self.main_frame,
+            text="Ausgabeoptionen",
+            style="Card.TLabelframe",
+            padding=pad_large
         )
-        row += 1
-        
-        # Output Options Frame
-        output_frame = ttk.LabelFrame(self.main_frame, text="Ausgabeoptionen", padding=pad_medium)
-        output_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=pad_medium, padx=pad_small)
+        output_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, pad_small))
         output_frame.columnconfigure(1, weight=1)
         row += 1
-        
-        # Output Format
-        ttk.Label(output_frame, text="Format:").grid(row=0, column=0, sticky=tk.W, pady=pad_small)
+
+        ttk.Label(output_frame, text="Format:", style="Surface.TLabel").grid(row=0, column=0, sticky=tk.W, pady=pad_small)
         self.output_format_var = tk.StringVar(value="excel")
-        
+
         format_combo = ttk.Combobox(
-            output_frame, 
+            output_frame,
             textvariable=self.output_format_var,
             values=["excel", "csv", "json", "yaml"],
             state="readonly",
             width=20
         )
-        format_combo.grid(row=0, column=1, sticky=tk.W, pady=pad_small, padx=pad_small)
+        format_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=pad_small, padx=(pad_medium, 0))
         format_combo.bind("<<ComboboxSelected>>", self.on_format_changed)
-        
-        # Excel File Selection
-        ttk.Label(output_frame, text="Excel-Vorlage:").grid(row=1, column=0, sticky=tk.W, pady=pad_small)
-        
-        excel_frame = ttk.Frame(output_frame)
-        excel_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=pad_small)
-        excel_frame.columnconfigure(0, weight=1)
-        
-        # Default to the Excel path in Documents folder
-        self.excel_var = tk.StringVar(value=str(get_default_excel_path()))
-        self.excel_entry = ttk.Entry(excel_frame, textvariable=self.excel_var, width=50)
-        self.excel_entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
-        self.excel_entry.bind("<FocusOut>", self._normalize_excel_entry)
-        self.excel_entry.bind("<Return>", self._normalize_excel_entry)
-        
+
+        ttk.Label(
+            output_frame,
+            text="Dateiname:",
+            style="Surface.TLabel"
+        ).grid(row=1, column=0, sticky=tk.W, pady=pad_small)
+
+        output_file_frame = ttk.Frame(output_frame, style="Surface.TFrame")
+        output_file_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=pad_small, padx=(pad_medium, 0))
+        output_file_frame.columnconfigure(0, weight=1)
+
+        self.output_file_var = tk.StringVar(value=str(self._get_default_output_path("excel")))
+        self.output_file_entry = ttk.Entry(output_file_frame, textvariable=self.output_file_var, width=50)
+        self.output_file_entry.grid(row=0, column=0, sticky=(tk.W, tk.E))
+        self.output_file_entry.bind("<FocusOut>", self._normalize_output_entry)
+        self.output_file_entry.bind("<Return>", self._normalize_output_entry)
+
         self.browse_btn = ttk.Button(
-            excel_frame, text="Speichern unter", command=self.browse_excel, width=14
+            output_file_frame, text="Speichern unter", command=self.browse_output_file, width=14
         )
-        self.browse_btn.grid(row=0, column=1, padx=(pad_small, 0))
-        
-        # Date Range Frame
-        self.date_frame = ttk.LabelFrame(self.main_frame, text="Datumsbereich", padding=pad_medium)
-        self.date_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=pad_medium, padx=pad_small)
+        self.browse_btn.grid(row=0, column=1, padx=(pad_medium, 0))
+
+        ttk.Label(
+            output_frame,
+            text="Der Dateiname wird automatisch auf das gewählte Format abgestimmt.",
+            style="Muted.TLabel",
+            wraplength=self._scaled(520),
+            justify=tk.LEFT
+        ).grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=(2, 0))
+
+        self.date_frame = ttk.LabelFrame(
+            self.main_frame,
+            text="Datumsbereich",
+            style="Card.TLabelframe",
+            padding=pad_large
+        )
+        self.date_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, pad_small))
         self.date_frame.columnconfigure(1, weight=1)
         self.date_frame.columnconfigure(3, weight=1)
         row += 1
-        
-        # From Date - with calendar button directly adjacent
-        ttk.Label(self.date_frame, text="Von:").grid(row=0, column=0, sticky=tk.W, padx=(pad_small, 2))
-        # Default from date is 01.01.2024 (European format)
+
+        ttk.Label(self.date_frame, text="Von:", style="Surface.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, pad_small))
         self.from_date_var = tk.StringVar(value="01.01.2024")
         self.from_date_entry = ttk.Entry(self.date_frame, textvariable=self.from_date_var, width=12)
         self.from_date_entry.grid(row=0, column=1, sticky=tk.W, padx=0)
-        # Load embedded calendar icon
+
         try:
             icon_data = base64.b64decode(CALENDAR_ICON_BASE64)
             icon_image = tk.PhotoImage(data=icon_data)
@@ -536,13 +689,17 @@ class OctopusSmartMeterGUI:
             image=self.calendar_icon,
             width=self.calendar_button_size,
             height=self.calendar_button_size,
+            relief=tk.FLAT,
+            borderwidth=0,
+            highlightthickness=0,
+            bg=self.COLOR_SURFACE_ALT,
+            activebackground=self.COLOR_ACCENT_SOFT,
+            cursor="hand2",
             command=lambda: self.show_calendar(self.from_date_var)
         )
         self.from_calendar_btn.grid(row=0, column=2, sticky=tk.W, padx=(0, pad_medium))
-        
-        # To Date - with calendar button directly adjacent
-        ttk.Label(self.date_frame, text="Bis:").grid(row=0, column=3, sticky=tk.W, padx=(pad_small, 2))
-        # To date is always yesterday (last complete day), format DD.MM.YYYY
+
+        ttk.Label(self.date_frame, text="Bis:", style="Surface.TLabel").grid(row=0, column=3, sticky=tk.W, padx=(pad_medium, pad_small))
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%d.%m.%Y")
         self.to_date_var = tk.StringVar(value=yesterday)
         self.to_date_entry = ttk.Entry(self.date_frame, textvariable=self.to_date_var, width=12)
@@ -552,76 +709,115 @@ class OctopusSmartMeterGUI:
             image=self.calendar_icon,
             width=self.calendar_button_size,
             height=self.calendar_button_size,
+            relief=tk.FLAT,
+            borderwidth=0,
+            highlightthickness=0,
+            bg=self.COLOR_SURFACE_ALT,
+            activebackground=self.COLOR_ACCENT_SOFT,
+            cursor="hand2",
             command=lambda: self.show_calendar(self.to_date_var)
         )
         self.to_calendar_btn.grid(row=0, column=5, sticky=tk.W, padx=0)
-        
-        # Progress Bar (initially hidden)
+
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(
-            self.main_frame, variable=self.progress_var, maximum=100, mode='indeterminate'
+            self.main_frame,
+            variable=self.progress_var,
+            maximum=100,
+            mode='indeterminate',
+            style='Modern.Horizontal.TProgressbar'
         )
-        
-        # Status Label
+
+        status_frame = ttk.Frame(self.main_frame, style="Surface.TFrame", padding=(pad_large, pad_medium))
+        status_frame.grid(row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=(0, pad_small))
+        status_frame.columnconfigure(0, weight=1)
         self.status_var = tk.StringVar(value="Bereit")
         self.status_label = ttk.Label(
-            self.main_frame, textvariable=self.status_var, 
-            foreground='blue', font=self.status_font
+            status_frame,
+            textvariable=self.status_var,
+            style='Status.TLabel'
         )
-        self.status_label.grid(row=row, column=0, columnspan=3, pady=pad_small)
+        self.status_label.grid(row=0, column=0, sticky=(tk.W, tk.E))
         row += 1
-        
-        # Get Data Button (bottom right)
+
         self.get_data_btn = ttk.Button(
-            self.main_frame, text="Daten vom Server abrufen", 
-            command=self.get_data, width=25
+            self.main_frame,
+            text="Daten vom Server abrufen",
+            command=self.get_data,
+            width=25,
+            style="Primary.TButton"
         )
-        self.get_data_btn.grid(row=row, column=2, sticky=tk.E, pady=pad_large)
-        
-        # Update UI state
+        self.get_data_btn.grid(row=row, column=2, sticky=tk.E, pady=(0, pad_medium))
+
         self.on_format_changed()
     
     def on_format_changed(self, event=None):
         """Handle output format change."""
+        previous_format = getattr(self, "last_output_format", "excel")
         format_type = self.output_format_var.get()
-        
-        if format_type == "excel":
-            self.excel_entry.config(state='normal')
-            self.browse_btn.config(state='normal')
-        else:
-            self.excel_entry.config(state='disabled')
-            self.browse_btn.config(state='disabled')
+        current_path = self._get_normalized_output_path(previous_format)
+        self.output_file_var.set(str(self._ensure_output_suffix(current_path, format_type)))
+        self.last_output_format = format_type
+
+        self.output_file_entry.config(state='normal')
+        self.browse_btn.config(state='normal')
     
-    def browse_excel(self):
-        """Open a save dialog for the Excel output file."""
-        current_path = self._get_normalized_excel_path()
+    def browse_output_file(self):
+        """Open a save dialog for the selected output file."""
+        format_type = self.output_format_var.get()
+        current_path = self._get_normalized_output_path(format_type)
+        title_map = {
+            "excel": "Excel-Datei speichern unter",
+            "csv": "CSV-Datei speichern unter",
+            "json": "JSON-Datei speichern unter",
+            "yaml": "YAML-Datei speichern unter",
+        }
         filename = filedialog.asksaveasfilename(
-            title="Excel-Datei speichern unter",
-            defaultextension=".xlsx",
+            title=title_map.get(format_type, "Datei speichern unter"),
+            defaultextension=self._get_extension_for_format(format_type),
             initialdir=str(current_path.parent),
             initialfile=current_path.name,
-            filetypes=[("Excel-Dateien", "*.xlsx"), ("Alle Dateien", "*.*")]
+            filetypes=self._get_filetypes_for_format(format_type)
         )
         if filename:
-            self.excel_var.set(str(self._ensure_excel_suffix(Path(filename))))
+            self.output_file_var.set(str(self._ensure_output_suffix(Path(filename), format_type)))
 
-    def _ensure_excel_suffix(self, path):
-        if path.suffix.lower() == ".xlsx":
+    def _get_extension_for_format(self, format_type):
+        return OUTPUT_EXTENSIONS.get(format_type, ".csv")
+
+    def _get_default_output_path(self, format_type):
+        return get_smartmeter_data_folder() / f"smartmeter_daten{self._get_extension_for_format(format_type)}"
+
+    def _get_filetypes_for_format(self, format_type):
+        filetypes = {
+            "excel": [("Excel-Dateien", "*.xlsx")],
+            "csv": [("CSV-Dateien", "*.csv")],
+            "json": [("JSON-Dateien", "*.json")],
+            "yaml": [("YAML-Dateien", "*.yaml")],
+        }
+        return filetypes.get(format_type, [("Alle Dateien", "*.*")]) + [("Alle Dateien", "*.*")]
+
+    def _ensure_output_suffix(self, path, format_type=None):
+        format_type = format_type or self.output_format_var.get()
+        target_suffix = self._get_extension_for_format(format_type)
+        if path.suffix.lower() == target_suffix:
             return path
-        return path.with_suffix(".xlsx")
+        return path.with_suffix(target_suffix)
 
-    def _get_normalized_excel_path(self):
-        raw_value = self.excel_var.get().strip()
+    def _get_normalized_output_path(self, format_type=None):
+        format_type = format_type or self.output_format_var.get()
+        raw_value = self.output_file_var.get().strip()
         if not raw_value:
-            return get_default_excel_path()
-        return self._ensure_excel_suffix(Path(raw_value).expanduser())
+            return self._get_default_output_path(format_type)
+        return self._ensure_output_suffix(Path(raw_value).expanduser(), format_type)
 
-    def _normalize_excel_entry(self, event=None):
-        self.excel_var.set(str(self._get_normalized_excel_path()))
+    def _normalize_output_entry(self, event=None):
+        self.output_file_var.set(str(self._get_normalized_output_path()))
     
     def show_calendar(self, target_var):
         """Show a simple calendar dialog."""
         top = tk.Toplevel(self.root)
+        top.configure(background=self.COLOR_BG)
         top.title("Datum auswählen")
         calendar_width = self._scaled(self.BASE_CALENDAR_WIDTH)
         calendar_height = self._scaled(self.BASE_CALENDAR_HEIGHT)
@@ -641,7 +837,7 @@ class OctopusSmartMeterGUI:
         selected_day = tk.IntVar(value=current_date.day)
         
         # Year and Month selection
-        header_frame = ttk.Frame(top)
+        header_frame = ttk.Frame(top, style="App.TFrame")
         header_frame.pack(pady=self._scaled(10))
         
         ttk.Spinbox(
@@ -658,11 +854,11 @@ class OctopusSmartMeterGUI:
         month_combo.pack(side=tk.LEFT, padx=self._scaled(5))
         
         # Calendar frame
-        cal_frame = ttk.Frame(top)
+        cal_frame = ttk.Frame(top, style="App.TFrame")
         cal_frame.pack(pady=self._scaled(10))
         
         # Day buttons frame
-        days_frame = ttk.Frame(cal_frame)
+        days_frame = ttk.Frame(cal_frame, style="App.TFrame")
         days_frame.pack()
         
         def select_day(day):
@@ -685,7 +881,7 @@ class OctopusSmartMeterGUI:
             
             # Day labels
             for i, day_name in enumerate(["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]):
-                ttk.Label(days_frame, text=day_name, width=4).grid(row=0, column=i)
+                ttk.Label(days_frame, text=day_name, width=4, style="Muted.TLabel").grid(row=0, column=i)
             
             # Day buttons
             first_weekday, _ = calendar.monthrange(year, month)
@@ -696,18 +892,29 @@ class OctopusSmartMeterGUI:
                         ttk.Label(days_frame, text="", width=4).grid(row=week, column=weekday)
                     elif day <= days_in_month:
                         btn = tk.Button(
-                            days_frame, text=str(day), width=4, font=self.default_font,
+                            days_frame,
+                            text=str(day),
+                            width=4,
+                            font=self.default_font,
+                            relief=tk.FLAT,
+                            borderwidth=0,
+                            highlightthickness=0,
+                            bg=self.COLOR_SURFACE,
+                            fg=self.COLOR_TEXT,
+                            activebackground=self.COLOR_ACCENT_SOFT,
+                            activeforeground=self.COLOR_TEXT,
+                            cursor="hand2",
                             command=lambda d=day: select_day(d)
                         )
                         if (day == current_date.day and 
                             month == current_date.month and 
                             year == current_date.year):
-                            btn.config(bg='#4CAF50', fg='white')
+                            btn.config(bg=self.COLOR_WARNING, fg="#ffffff", activebackground=self.COLOR_WARNING)
                         btn.grid(row=week, column=weekday)
                         day += 1
         
         # Update button
-        update_btn = ttk.Button(top, text="Update", command=update_calendar)
+        update_btn = ttk.Button(top, text="Kalender aktualisieren", command=update_calendar)
         update_btn.pack(pady=self._scaled(5))
         
         # Initial calendar display
@@ -726,10 +933,14 @@ class OctopusSmartMeterGUI:
                 self.email_var.set(config.get('email', ''))
                 self.password_var.set(config.get('password', ''))
                 if config_saving_enabled:
-                    self.excel_var.set(config.get('excel_file', str(get_default_excel_path())))
+                    saved_output_file = config.get('output_file') or config.get('excel_file')
+                    if saved_output_file:
+                        self.output_file_var.set(saved_output_file)
+                    else:
+                        self.output_file_var.set(str(self._get_default_output_path('excel')))
                     self.save_config_var.set(True)
                 else:
-                    self.excel_var.set(str(get_default_excel_path()))
+                    self.output_file_var.set(str(self._get_default_output_path('excel')))
                     self.save_config_var.set(False)
                 # Validate output format, default to excel if invalid
                 valid_formats = ['excel', 'csv', 'json', 'yaml']
@@ -738,6 +949,7 @@ class OctopusSmartMeterGUI:
                     print(f"[DEBUG] Falsches Format in config: {saved_format}, verwende stattdessen Excel")
                     saved_format = 'excel'
                 self.output_format_var.set(saved_format)
+                self.last_output_format = saved_format
                 # Default from date: 01.01.2024 or from config
                 default_from = config.get('from_date', '01.01.2024')
                 self.from_date_var.set(default_from)
@@ -819,7 +1031,9 @@ class OctopusSmartMeterGUI:
         }
 
         if self.save_config_var.get():
-            config['excel_file'] = str(self._get_normalized_excel_path())
+            normalized_output_path = str(self._get_normalized_output_path())
+            config['output_file'] = normalized_output_path
+            config['excel_file'] = normalized_output_path
         
         try:
             self._write_config(config)
@@ -1075,6 +1289,237 @@ class OctopusSmartMeterGUI:
                         traceback.print_exc()
                     raise
             
+        except Exception as e:
+            messagebox.showerror("Fehler", f"Ein Fehler ist aufgetreten:\n\n{str(e)}")
+            self.status_var.set(f"Fehler: {str(e)}")
+        finally:
+            self.progress_bar.stop()
+            self.progress_bar.grid_remove()
+            self.get_data_btn.config(state='normal')
+
+    def _write_csv_file(self, path, readings):
+        """Write readings to a CSV file."""
+        with open(path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['start', 'end', 'consumption_kwh'])
+            for reading in readings:
+                writer.writerow([
+                    format_datetime(reading['start']),
+                    format_datetime(reading['end']),
+                    reading['consumption_kwh']
+                ])
+
+    def validate_inputs(self):
+        """Validate user inputs."""
+        if not self.email_var.get():
+            messagebox.showerror("Fehler", "E-Mail ist erforderlich!")
+            return False
+        if not self.password_var.get():
+            messagebox.showerror("Fehler", "Passwort ist erforderlich!")
+            return False
+        if not self.output_file_var.get():
+            messagebox.showerror("Fehler", "Bitte wählen Sie einen Dateinamen aus!")
+            return False
+
+        self._normalize_output_entry()
+
+        try:
+            from_date = datetime.strptime(self.from_date_var.get(), "%d.%m.%Y")
+            to_date = datetime.strptime(self.to_date_var.get(), "%d.%m.%Y")
+            if from_date > to_date:
+                messagebox.showerror("Fehler", "Das Von-Datum muss vor oder gleich dem Bis-Datum sein!")
+                return False
+        except ValueError:
+            messagebox.showerror("Fehler", "Ungültiges Datumsformat! Verwenden Sie TT.MM.JJJJ (z.B. 01.01.2024)")
+            return False
+
+        return True
+
+    def get_data(self):
+        """Fetch data from Octopus Energy server - only fetch missing data."""
+        if not self.validate_inputs():
+            return
+
+        data_dir = get_smartmeter_data_folder()
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        self.save_config()
+
+        self.get_data_btn.config(state='disabled')
+        self.progress_bar.grid(row=17, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=5)
+        self.progress_bar.start(10)
+        self.root.update()
+
+        try:
+            with self._capture_debug_output():
+                try:
+                    period_from = datetime.strptime(self.from_date_var.get(), "%d.%m.%Y")
+                    period_to = datetime.strptime(self.to_date_var.get(), "%d.%m.%Y")
+                    period_to = period_to + timedelta(days=1) - timedelta(seconds=1)
+
+                    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    yesterday_end = today - timedelta(seconds=1)
+
+                    if period_to >= today:
+                        period_to = yesterday_end
+
+                    fetch_from = period_from
+                    fetch_to = period_to
+                    need_to_fetch = True
+
+                    if self.latest_timestamp and self.latest_timestamp.date() >= (today - timedelta(days=1)).date():
+                        self._set_status(
+                            f"CSV ist bereits aktuell ({self.latest_timestamp.date()}). Es werden keine Daten geladen.",
+                            update=True,
+                        )
+                        need_to_fetch = False
+                        fetch_from = None
+                        fetch_to = None
+                    elif self.latest_timestamp and self.latest_timestamp >= period_from:
+                        fetch_from = self.latest_timestamp - timedelta(hours=1)
+                        if fetch_from > yesterday_end:
+                            fetch_from = yesterday_end
+                            need_to_fetch = False
+                        self._set_status(f"Vorhandene Daten entdeckt. Lese ab {fetch_from}...", update=True)
+
+                    new_readings = []
+
+                    if need_to_fetch:
+                        self._set_status("Authentifizierung...", update=True)
+
+                        client = OctopusGermanyClient(
+                            self.email_var.get(),
+                            self.password_var.get(),
+                            debug=self.debug_var.get()
+                        )
+
+                        if not client.authenticate():
+                            raise Exception("Authentifizierung fehlgeschlagen! Überprüfen Sie Ihre E-Mail und Ihr Passwort.")
+
+                        self._set_status("Kundennummer wird ermittelt...", update=True)
+
+                        accounts = client.get_accounts_from_viewer()
+                        if not accounts:
+                            raise Exception("Kein Konto gefunden! Überprüfen Sie Ihre Zugangsdaten.")
+                        if len(accounts) > 1:
+                            account_list = "\n".join([f"  - {acc.get('number', 'unknown')}" for acc in accounts])
+                            raise Exception(f"Mehrere Konten gefunden ({len(accounts)}). Bitte wählen Sie ein Konto aus:\n{account_list}")
+
+                        account_number = accounts[0].get('number')
+                        self._set_status(f"Kundennummer gefunden: {account_number}", update=True)
+
+                        self._set_status("Zähler werden ermittelt...", update=True)
+
+                        meter_info = client.find_smart_meter(account_number)
+                        if not meter_info:
+                            raise Exception(
+                                "No smart meter found for this account!\n\n"
+                                "Possible reasons:\n"
+                                "- Smart meter not yet commissioned\n"
+                                "- No electricity meter found\n"
+                                "- Check account number"
+                            )
+
+                        malo_number, meter_id, property_id = meter_info
+                        self._set_status(f"Zähler für MALO {malo_number} gefunden, Daten werden abgerufen...", update=True)
+
+                        def update_progress(count, page):
+                            self._set_status(f"Empfange Daten... {count} Einträge (Seite {page})", update=True)
+
+                        new_readings = client.get_consumption_graphql(
+                            property_id=property_id,
+                            period_from=fetch_from,
+                            period_to=fetch_to,
+                            fetch_all=True,
+                            progress_callback=update_progress
+                        )
+
+                        if not new_readings and not self.existing_data:
+                            raise Exception(
+                                "Keine Verbrauchsdaten gefunden!\n\n"
+                                "Mögliche Gründe:\n"
+                                "- Smart Meter sendet noch keine Daten\n"
+                                "- Keine Messwerte verfügbar\n"
+                                "- Zählerproblem - kontaktieren Sie Octopus"
+                            )
+
+                    all_readings = self.existing_data + new_readings
+                    if not all_readings:
+                        raise Exception("Keine Daten zum Speichern!")
+
+                    seen = {}
+                    for reading in all_readings:
+                        seen[reading['start'].isoformat()] = reading
+
+                    unique_data = list(seen.values())
+                    unique_data.sort(key=lambda x: normalize_datetime(x['start']))
+
+                    self.existing_data = unique_data
+                    if unique_data:
+                        self.latest_timestamp = max(normalize_datetime(r['end']) for r in unique_data)
+
+                    format_type = self.output_format_var.get()
+                    output_path = self._get_normalized_output_path().resolve()
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+                    self._set_status(f"Speichere {len(unique_data)} Einträge in consumption.csv...", update=True)
+                    self._write_csv_file(self.csv_path, unique_data)
+
+                    if format_type == "excel":
+                        self._set_status("Excel-Datei wird gefüllt...", update=True)
+                        success = fill_excel_template(unique_data, str(output_path), str(output_path))
+                        if success:
+                            messagebox.showinfo(
+                                "Erfolg",
+                                f"Daten erfolgreich gespeichert!\n\n"
+                                f"CSV: consumption.csv ({len(unique_data)} Einträge)\n"
+                                f"Excel: {output_path}"
+                            )
+                        else:
+                            raise Exception("Excel-Vorlage konnte nicht gefüllt werden")
+
+                    elif format_type == "csv":
+                        if output_path != self.csv_path.resolve():
+                            self._set_status(f"Speichere {len(unique_data)} Einträge als CSV...", update=True)
+                            self._write_csv_file(output_path, unique_data)
+
+                        messagebox.showinfo(
+                            "Erfolg",
+                            f"Daten erfolgreich gespeichert!\n\n"
+                            f"CSV: {output_path}\n"
+                            f"Gesamteinträge: {len(unique_data)}"
+                        )
+
+                    elif format_type == "json":
+                        self._set_status(f"Speichere {len(unique_data)} Einträge als JSON...", update=True)
+                        if save_to_json(unique_data, output_path):
+                            messagebox.showinfo(
+                                "Erfolg",
+                                f"Daten erfolgreich gespeichert!\n\n"
+                                f"JSON: {output_path}\n"
+                                f"Gesamteinträge: {len(unique_data)}"
+                            )
+                        else:
+                            raise Exception("Fehler beim Speichern als JSON")
+
+                    elif format_type == "yaml":
+                        self._set_status(f"Speichere {len(unique_data)} Einträge als YAML...", update=True)
+                        if save_to_yaml(unique_data, output_path):
+                            messagebox.showinfo(
+                                "Erfolg",
+                                f"Daten erfolgreich gespeichert!\n\n"
+                                f"YAML: {output_path}\n"
+                                f"Gesamteinträge: {len(unique_data)}"
+                            )
+                        else:
+                            raise Exception("Fehler beim Speichern als YAML")
+
+                    self._set_status(f"Fertig! Daten in Documents/smartmeter_data/ ({len(unique_data)} Einträge)")
+                except Exception:
+                    if self.debug_var.get():
+                        traceback.print_exc()
+                    raise
+
         except Exception as e:
             messagebox.showerror("Fehler", f"Ein Fehler ist aufgetreten:\n\n{str(e)}")
             self.status_var.set(f"Fehler: {str(e)}")
