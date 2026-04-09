@@ -142,6 +142,7 @@ Die Daten werden in `~/Documents/smartmeter_data/` gespeichert:
 ├── consumption.csv              # Alle Verbrauchsdaten (CSV)
 ├── consumption.json             # Alle Verbrauchsdaten (JSON)
 ├── consumption.yaml             # Alle Verbrauchsdaten (YAML)
+├── log.txt                      # GUI-Debug-Log mit API-Requests/Responses, Statusmeldungen und Fehlern
 ├── stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx  # Excel-Vorlage
 └── config.json                  # GUI-Konfiguration (optional)
 ```
@@ -211,6 +212,7 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 - **Datumsbereichsauswahl** mit Kalender-Buttons
 - **Fortschrittsanzeige** - Zeigt "Empfange Daten... X Einträge (Seite Y)"
 - **Konfigurationsspeicherung** - Speichert E-Mail/Passwort in `config.json`
+- **Debug-Ausgabe** - Wenn aktiviert, wird der vollständige GUI-Debug-Log nach `~/Documents/smartmeter_data/log.txt` geschrieben
 - **Automatisches Laden** - Lädt gespeicherte Konfiguration beim Start
 
 ### Screenshot
