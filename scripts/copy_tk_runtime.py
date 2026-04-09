@@ -37,9 +37,12 @@ def main() -> int:
     copy_file(dll_root / "_tkinter.pyd", bundle_root / "_tkinter.pyd")
     copy_file(dll_root / "tcl86t.dll", bundle_root / "tcl86t.dll")
     copy_file(dll_root / "tk86t.dll", bundle_root / "tk86t.dll")
+    copy_file(dll_root / "zlib1.dll", bundle_root / "zlib1.dll")
     copy_tree(lib_root / "tkinter", bundle_root / "tkinter")
     copy_tree(tcl_root / "tcl8.6", bundle_root / "tcl" / "tcl8.6")
     copy_tree(tcl_root / "tk8.6", bundle_root / "tcl" / "tk8.6")
+    copy_tree(tcl_root / "dde1.4", bundle_root / "tcl" / "dde1.4")
+    copy_tree(tcl_root / "reg1.3", bundle_root / "tcl" / "reg1.3")
 
     return 0
 
