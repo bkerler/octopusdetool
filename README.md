@@ -302,3 +302,7 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 ## Lizenz
 
 MIT Lizenz - Frei zu verwenden und zu modifizieren.
+
+## toDo
+- Die Zugangsdaten verschlüsselt in der config.json abspeichern
+- Passworteingabe maskieren
