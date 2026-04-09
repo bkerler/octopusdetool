@@ -5,11 +5,10 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 ## Funktionen
 
 - 📊 **Stündliche Verbrauchsdaten** - Import und Export
-- 🔄 **Inkrementelle Aktualisierung** - Nur neue Daten abrufen, bestehende CSV beibehalten
-- 📁 **Einzelne CSV-Datei** - Alle Daten in `consumption.csv`
-- 📈 **Excel-Vorlagenfüllung** - Füllt die deutsche Stromtarif-Vorlage
-- 🔍 **Automatische Zählererkennung** über GraphQL mit Kundennummer
-- 🔐 **E-Mail/Passwort-Authentifizierung** über GraphQL
+- 🔄 **Inkrementelle Aktualisierung** - Nur neue Daten abrufen
+- 📁 **Mehrere Ausgabeformate** - CSV, JSON, YAML oder Excel
+- 📈 **Excel-Erstellung** - Erstellt eine Excel-Datei mit allen Daten 
+- 🔍 **Automatische Kontoerkennung** - Kundennummer wird automatisch ermittelt
 - 🔄 **Automatische Token-Aktualisierung** - Behandelt 60-minütige Token-Gültigkeit
 - 🖥️ **GUI-Version** - Benutzerfreundliche grafische Oberfläche
 
@@ -17,13 +16,8 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 
 1. Ein Octopus Energy **Deutschland** Konto
 2. Ihre Octopus Energy Zugangsdaten (E-Mail und Passwort)
-3. Ihre Kundennummer (z.B. `A-12345678`)
 
-### Ihre Kundennummer finden
-
-- Melden Sie sich bei Ihrem [Octopus Energy Deutschland Dashboard](https://octopus.energy/de/) an
-- Ihre Kundennummer wird im Dashboard angezeigt (z.B. `A-12345678`)
-- Sie finden sie auch auf Ihren Rechnungen
+Die Kundennummer wird automatisch ermittelt. Bei mehreren Konten können Sie mit `--list-accounts` alle Konten anzeigen und mit `--account-number` eines auswählen.
 
 ## Installation
 
@@ -51,7 +45,42 @@ octopusdetool_gui
 
 ### Kommandozeile (CLI)
 
-#### Alle verfügbaren Daten abrufen
+#### Alle verfügbaren Daten abrufen (einfachst - nur E-Mail und Passwort)
+
+```bash
+python -m octopusdetool.octopusdetool \
+    --email user@example.com \
+    --password ihr_passwort
+```
+
+#### Als JSON speichern
+
+```bash
+python -m octopusdetool.octopusdetool \
+    --email user@example.com \
+    --password ihr_passwort \
+    --output-format json
+```
+
+#### Als YAML speichern
+
+```bash
+python -m octopusdetool.octopusdetool \
+    --email user@example.com \
+    --password ihr_passwort \
+    --output-format yaml
+```
+
+#### Konten auflisten (nur E-Mail und Passwort nötig)
+
+```bash
+python -m octopusdetool.octopusdetool \
+    --email user@example.com \
+    --password ihr_passwort \
+    --list-accounts
+```
+
+#### Daten für bestimmtes Konto abrufen (bei mehreren Konten)
 
 ```bash
 python -m octopusdetool.octopusdetool \
@@ -66,7 +95,6 @@ python -m octopusdetool.octopusdetool \
 python -m octopusdetool.octopusdetool \
     --email user@example.com \
     --password ihr_passwort \
-    --account-number A-12345678 \
     --period-from 01.01.2024 \
     --period-to 31.01.2024
 ```
@@ -77,7 +105,6 @@ python -m octopusdetool.octopusdetool \
 python -m octopusdetool.octopusdetool \
     --email user@example.com \
     --password ihr_passwort \
-    --account-number A-12345678 \
     --fill-excel ~/Documents/smartmeter_data/stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx
 ```
 
@@ -87,7 +114,6 @@ python -m octopusdetool.octopusdetool \
 python -m octopusdetool.octopusdetool \
     --email user@example.com \
     --password ihr_passwort \
-    --account-number A-12345678 \
     --debug
 ```
 
@@ -97,13 +123,13 @@ python -m octopusdetool.octopusdetool \
 |--------|--------------|
 | `--email` | **Erforderlich.** Ihre Octopus Energy E-Mail |
 | `--password` | **Erforderlich.** Ihr Octopus Energy Passwort |
-| `--account-number` | **Erforderlich.** Ihre Kundennummer (z.B. `A-12345678`) |
-| `--meter-id` | Zähler-ID (optional - wird automatisch ermittelt) |
-| `--property-id` | Eigenschafts-ID (optional - wird automatisch ermittelt) |
-| `--output` | Ausgabepfad für CSV (Standard: `~/Documents/smartmeter_data/consumption.csv`) |
+| `--account-number` | Ihre Kundennummer (z.B. `A-12345678`). Wird automatisch ermittelt. |
+| `--list-accounts` | Listet alle Konten auf (nützlich bei mehreren Konten) |
+| `--output` | Ausgabepfad (Standard: `~/Documents/smartmeter_data/consumption`) |
+| `--output-format` | Dateiformat: `csv`, `json`, `yaml` (Standard: csv) |
 | `--period-from` | Startdatum (DD.MM.YYYY) |
 | `--period-to` | Enddatum (DD.MM.YYYY) |
-| `--format` | Ausgabeformat: `csv`, `hourly`, oder `all` |
+| `--format` | Datenausgabe: `csv`, `hourly`, `all` (veraltet, nutzen Sie `--output-format`) |
 | `--fill-excel` | Excel-Vorlage mit Verbrauchsdaten füllen |
 | `--debug` | Debug-Ausgabe für alle API-Anfragen aktivieren |
 
@@ -113,7 +139,9 @@ Die Daten werden in `~/Documents/smartmeter_data/` gespeichert:
 
 ```
 ~/Documents/smartmeter_data/
-├── consumption.csv              # Alle Verbrauchsdaten
+├── consumption.csv              # Alle Verbrauchsdaten (CSV)
+├── consumption.json             # Alle Verbrauchsdaten (JSON)
+├── consumption.yaml             # Alle Verbrauchsdaten (YAML)
 ├── stromtarif_verbrauch_bis_2027_mit_grundpreis_blanko.xlsx  # Excel-Vorlage
 └── config.json                  # GUI-Konfiguration (optional)
 ```
@@ -125,6 +153,42 @@ Die Daten werden in `~/Documents/smartmeter_data/` gespeichert:
 | `start` | Startzeitpunkt (DD.MM.YYYY HH:MM:SS) |
 | `end` | Endzeitpunkt (DD.MM.YYYY HH:MM:SS) |
 | `consumption_kwh` | Energieverbrauch in kWh |
+
+### JSON-Format
+
+```json
+{
+  "metadata": {
+    "export_date": "2024-01-15T10:30:00",
+    "total_readings": 3600,
+    "source": "Octopus Energy Germany Smart Meter"
+  },
+  "readings": [
+    {
+      "start": "2024-01-01T00:00:00+00:00",
+      "end": "2024-01-01T01:00:00+00:00",
+      "consumption_kwh": 0.5,
+      "duration_seconds": 3600,
+      "unit": "kWh"
+    }
+  ]
+}
+```
+
+### YAML-Format
+
+```yaml
+metadata:
+  export_date: '2024-01-15T10:30:00'
+  total_readings: 3600
+  source: Octopus Energy Germany Smart Meter
+readings:
+  - start: '2024-01-01T00:00:00+00:00'
+    end: '2024-01-01T01:00:00+00:00'
+    consumption_kwh: 0.5
+    duration_seconds: 3600
+    unit: kWh
+```
 
 ### Excel-Vorlage
 
@@ -141,14 +205,13 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 
 ### Funktionen
 
-- **Eingabefelder** für E-Mail, Passwort und Kundennummer
+- **Eingabefelder** für E-Mail und Passwort
+- **Ausgabeformatauswahl**: Excel (Standard), CSV, JSON oder YAML
 - **Excel-Dateiauswahl** mit Dateibrowser
-- **Ausgabeformatauswahl**: CSV oder Excel
 - **Datumsbereichsauswahl** mit Kalender-Buttons
-- **Konfigurationsspeicherung** - Speichert Einstellungen in `config.json`
+- **Fortschrittsanzeige** - Zeigt "Empfange Daten... X Einträge (Seite Y)"
+- **Konfigurationsspeicherung** - Speichert E-Mail/Passwort in `config.json`
 - **Automatisches Laden** - Lädt gespeicherte Konfiguration beim Start
-- **Fortschrittsanzeige** - Zeigt aktuellen Status
-- **Intelligentes Abrufen** - Liest erst CSV, authentifiziert nur wenn nötig
 
 ### Screenshot
 
@@ -159,13 +222,12 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 ├─────────────────────────────────────────────┤
 │  E-Mail:        [____________________]      │
 │  Passwort:      [____________________]      │
-│  Kundennummer:  [____________________]      │
 │                                             │
 │  [✓] Konfiguration in config.json speichern │
 │  [ ] Debug-Ausgabe aktivieren               │
 ├─────────────────────────────────────────────┤
 │  Ausgabeoptionen                            │
-│  Format: (*) CSV  ( ) Excel                 │
+│  Format: (*) Excel  ( ) CSV  ( ) JSON/YAML  │
 │  Excel-Vorlage: [____________] [Durchsuchen]│
 ├─────────────────────────────────────────────┤
 │  Datumsbereich                              │
@@ -208,6 +270,10 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 - Stellen Sie sicher, dass das Konto aktiv ist
 - Testen Sie die Anmeldung über die Webseite
 
+### "Kein Konto gefunden"
+- Überprüfen Sie Ihre Zugangsdaten
+- Verwenden Sie `--list-accounts` um verfügbare Konten anzuzeigen
+
 ### "Kein Smart Meter gefunden"
 - Prüfen Sie, ob ein Smart Meter installiert ist
 - Vergewissern Sie sich, dass der Zähler für Smart-Readings freigeschaltet ist
@@ -224,7 +290,7 @@ Die GUI bietet eine benutzerfreundliche Oberfläche:
 
 ## Sicherheitshinweise
 
-- Das Skript speichert Ihr Passwort nicht
+- Das Skript speichert Ihr Passwort nicht dauerhaft
 - Tokens sind 60 Minuten gültig
 - Die GUI kann Zugangsdaten optional in `config.json` speichern
 - Diese Datei wird im Documents-Ordner gespeichert

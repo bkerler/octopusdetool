@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
+import yaml
 
 
 def get_documents_folder() -> Path:
@@ -85,6 +86,20 @@ mutation krakenTokenAuthentication($email: String!, $password: String!) {
     obtainKrakenToken(input: { email: $email, password: $password }) {
         token
         payload
+    }
+}
+"""
+
+# Viewer query - get current user's account without needing account number
+VIEWER_QUERY = """
+query Viewer {
+    viewer {
+        accounts {
+            ... on AccountType {
+                id
+                number
+            }
+        }
     }
 }
 """
@@ -289,6 +304,14 @@ class OctopusGermanyClient:
         result = self._graphql_request(ACCOUNT_DETAILS_QUERY, variables)
         return result.get("account", {})
 
+    def get_accounts_from_viewer(self) -> list[dict]:
+        """Get all accounts for the authenticated user using viewer query."""
+        result = self._graphql_request(VIEWER_QUERY, {})
+        viewer_data = result.get("viewer", {})
+        accounts = viewer_data.get("accounts", [])
+        self._log_debug(f"Found {len(accounts)} account(s) from viewer")
+        return accounts
+
     def find_smart_meter(self, account_number: str) -> tuple[str, str, str] | None:
         """
         Find the smart meter ID and its parent property for an account.
@@ -329,7 +352,7 @@ class OctopusGermanyClient:
         
         return None
 
-    def get_consumption_graphql(self, property_id, period_from=None, period_to=None, fetch_all=False):
+    def get_consumption_graphql(self, property_id, period_from=None, period_to=None, fetch_all=False, progress_callback=None):
         """
         Get consumption data using GraphQL measurements query with hourly interval filter.
         
@@ -338,6 +361,7 @@ class OctopusGermanyClient:
             period_from: Start datetime (optional)
             period_to: End datetime (optional)
             fetch_all: If True, fetch all pages of data
+            progress_callback: Optional callback function(current_count, page_num) to report progress
             
         Returns:
             List of consumption readings with start, end, and consumption_kwh
@@ -439,6 +463,10 @@ class OctopusGermanyClient:
                         self._log_debug(f"Error parsing measurement: {e}")
                         continue
             
+            # Report progress
+            if progress_callback:
+                progress_callback(len(all_intervals), page_count)
+            
             # Check if there are more pages
             if not page_info.get("hasNextPage"):
                 self._log_debug("No more pages available")
@@ -471,6 +499,58 @@ def parse_date(date_str: str) -> datetime:
 def parse_datetime(datetime_str: str) -> datetime:
     """Parse datetime string in European format (DD.MM.YYYY HH:MM:SS)."""
     return datetime.strptime(datetime_str, "%d.%m.%Y %H:%M:%S")
+
+
+def convert_readings_for_export(readings: list) -> list:
+    """Convert readings to serializable format for JSON/YAML export."""
+    export_data = []
+    for reading in readings:
+        export_data.append({
+            'start': reading['start'].isoformat() if isinstance(reading['start'], datetime) else reading['start'],
+            'end': reading['end'].isoformat() if isinstance(reading['end'], datetime) else reading['end'],
+            'consumption_kwh': reading['consumption_kwh'],
+            'duration_seconds': reading.get('duration_seconds'),
+            'unit': reading.get('unit', 'kWh')
+        })
+    return export_data
+
+
+def save_to_json(readings: list, output_path: Path) -> bool:
+    """Save readings to JSON format."""
+    try:
+        export_data = {
+            'metadata': {
+                'export_date': datetime.now().isoformat(),
+                'total_readings': len(readings),
+                'source': 'Octopus Energy Germany Smart Meter'
+            },
+            'readings': convert_readings_for_export(readings)
+        }
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Fehler beim Speichern als JSON: {e}")
+        return False
+
+
+def save_to_yaml(readings: list, output_path: Path) -> bool:
+    """Save readings to YAML format."""
+    try:
+        export_data = {
+            'metadata': {
+                'export_date': datetime.now().isoformat(),
+                'total_readings': len(readings),
+                'source': 'Octopus Energy Germany Smart Meter'
+            },
+            'readings': convert_readings_for_export(readings)
+        }
+        with open(output_path, 'w', encoding='utf-8') as f:
+            yaml.dump(export_data, f, allow_unicode=True, sort_keys=False)
+        return True
+    except Exception as e:
+        print(f"Fehler beim Speichern als YAML: {e}")
+        return False
 
 
 def fill_excel_template(readings: list, template_path: str, output_path: str):
@@ -697,6 +777,63 @@ def merge_and_save_csv(all_data: list, csv_path: Path):
     print(f"{len(unique_data)} Einträge gespeichert nach {csv_path}")
 
 
+def save_data(all_data: list, output_path: Path, output_format: str = "csv"):
+    """
+    Save data to the specified format.
+    
+    Args:
+        all_data: List of all readings
+        output_path: Base path (without extension)
+        output_format: One of 'csv', 'json', 'yaml'
+    """
+    if not all_data:
+        print("Keine Daten zum Speichern")
+        return False
+    
+    # Remove duplicates based on start time (keep last occurrence)
+    seen = {}
+    for reading in all_data:
+        key = reading['start'].isoformat() if isinstance(reading['start'], datetime) else reading['start']
+        seen[key] = reading
+    
+    # Convert back to list and sort
+    unique_data = list(seen.values())
+    unique_data.sort(key=lambda x: x['start'] if isinstance(x['start'], datetime) else datetime.fromisoformat(x['start']))
+    
+    if output_format == "csv":
+        # Change extension to .csv
+        csv_path = output_path.with_suffix('.csv')
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['start', 'end', 'consumption_kwh'])
+            for reading in unique_data:
+                writer.writerow([
+                    format_datetime(reading['start']) if isinstance(reading['start'], datetime) else reading['start'],
+                    format_datetime(reading['end']) if isinstance(reading['end'], datetime) else reading['end'],
+                    reading['consumption_kwh']
+                ])
+        print(f"{len(unique_data)} Einträge gespeichert nach {csv_path}")
+        return True
+    
+    elif output_format == "json":
+        json_path = output_path.with_suffix('.json')
+        if save_to_json(unique_data, json_path):
+            print(f"{len(unique_data)} Einträge als JSON gespeichert nach {json_path}")
+            return True
+        return False
+    
+    elif output_format == "yaml":
+        yaml_path = output_path.with_suffix('.yaml')
+        if save_to_yaml(unique_data, yaml_path):
+            print(f"{len(unique_data)} Einträge als YAML gespeichert nach {yaml_path}")
+            return True
+        return False
+    
+    else:
+        print(f"Unbekanntes Format: {output_format}")
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Fetch smart meter data from Octopus Energy Germany"
@@ -713,8 +850,8 @@ def main():
     )
     parser.add_argument(
         "--account-number", 
-        required=True,
-        help="Your account number (e.g., A-12345678)"
+        required=False,
+        help="Your account number (e.g., A-12345678). If not provided, will be auto-discovered."
     )
     parser.add_argument(
         "--meter-id", 
@@ -741,7 +878,13 @@ def main():
         "--format", 
         choices=["csv", "hourly", "all"],
         default="csv",
-        help="Output format: csv (raw intervals), hourly (interpolated), all (all columns)"
+        help="Data format: csv (raw intervals), hourly (interpolated), all (all columns)"
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=["csv", "json", "yaml"],
+        default="csv",
+        help="Output file format (default: csv)"
     )
     parser.add_argument(
         "--fill-excel",
@@ -754,8 +897,37 @@ def main():
         action="store_true",
         help="Enable debug output for all API requests"
     )
+    parser.add_argument(
+        "--list-accounts",
+        action="store_true",
+        help="List all accounts for the authenticated user and exit"
+    )
     
     args = parser.parse_args()
+    
+    # Handle --list-accounts option
+    if args.list_accounts:
+        if not args.email or not args.password:
+            print("Fehler: E-Mail und Passwort sind erforderlich, um Konten aufzulisten.")
+            print("Verwendung: --email user@example.com --password pass --list-accounts")
+            sys.exit(1)
+        
+        client = OctopusGermanyClient(args.email, args.password, debug=args.debug)
+        print("Authentifizierung...")
+        if not client.authenticate():
+            print("Authentifizierung fehlgeschlagen!")
+            sys.exit(1)
+        
+        print("\nVerfügbare Konten:")
+        accounts = client.get_accounts_from_viewer()
+        if accounts:
+            for acc in accounts:
+                acc_num = acc.get('number', 'unknown')
+                acc_id = acc.get('id', 'unknown')
+                print(f"  - Kundennummer: {acc_num} (ID: {acc_id})")
+        else:
+            print("  Keine Konten gefunden.")
+        sys.exit(0)
     
     # Ensure Excel template exists in Documents folder
     ensure_excel_template()
@@ -829,10 +1001,26 @@ def main():
             sys.exit(1)
         print("Authentication successful!")
         
+        # Auto-discover account number if not provided
+        account_number = args.account_number
+        if not account_number:
+            print("\nDiscovering account number...")
+            accounts = client.get_accounts_from_viewer()
+            if not accounts:
+                print("Kein Konto gefunden! Überprüfen Sie Ihre Zugangsdaten.")
+                sys.exit(1)
+            if len(accounts) > 1:
+                print(f"Mehrere Konten gefunden ({len(accounts)}). Bitte wählen Sie eines mit --account-number:")
+                for acc in accounts:
+                    print(f"  - {acc.get('number', 'unknown')} (ID: {acc.get('id', 'unknown')})")
+                sys.exit(1)
+            account_number = accounts[0].get('number')
+            print(f"Gefundene Kundennummer: {account_number}")
+        
         # Get meter ID if not provided
         if not property_id:
             print("\nDiscovering smart meter...")
-            meter_info = client.find_smart_meter(args.account_number)
+            meter_info = client.find_smart_meter(account_number)
             if meter_info:
                 malo_number, meter_id, property_id = meter_info
                 print(f"Verwende Zähler-ID: {meter_id}")
@@ -854,12 +1042,19 @@ def main():
         else:
             print("Alle verfügbaren Daten werden abgerufen...")
         
+        # Progress callback for CLI
+        def cli_progress(count, page):
+            print(f"  Empfange... {count} Einträge (Seite {page})", end='\r', flush=True)
+        
         new_readings = client.get_consumption_graphql(
             property_id,
             period_from=fetch_from,
             period_to=fetch_to,
-            fetch_all=True
+            fetch_all=True,
+            progress_callback=cli_progress
         )
+        if new_readings:
+            print()  # New line after progress
     
     if not new_readings and not existing_data:
         print("\nNo consumption data found!")
@@ -887,13 +1082,16 @@ def main():
     
     # Remove duplicates and save
     print(f"\nMerging data: {len(existing_data)} existing + {len(new_readings)} new = {len(all_readings)} total")
-    merge_and_save_csv(all_readings, output_path)
+    
+    # Save in requested format
+    output_format = args.output_format
+    save_data(all_readings, output_path, output_format)
     
     # Read back the merged data (now deduplicated and sorted)
-    final_data, _ = read_existing_csv(output_path)
+    final_data, _ = read_existing_csv(output_path.with_suffix('.csv'))
     
     # Show data summary
-    print(f"\nTotal data in CSV: {len(final_data)} readings")
+    print(f"\nTotal data: {len(final_data)} readings")
     if final_data:
         total_kwh = sum(r["consumption_kwh"] for r in final_data)
         print(f"Gesamtverbrauch in CSV: {total_kwh:.2f} kWh")
@@ -924,11 +1122,16 @@ def main():
     
     print("\n" + "="*60)
     print("Daten erfolgreich geschrieben nach:")
-    print(f"  - CSV: {output_path}")
+    if output_format == "csv":
+        print(f"  - CSV: {output_path.with_suffix('.csv')}")
+    elif output_format == "json":
+        print(f"  - JSON: {output_path.with_suffix('.json')}")
+    elif output_format == "yaml":
+        print(f"  - YAML: {output_path.with_suffix('.yaml')}")
     if args.fill_excel:
         print(f"  - Excel: {Path(args.fill_excel)}")
     print("="*60)
-    print("\nDone!")
+    print("\nFertig!")
 
 
 if __name__ == "__main__":

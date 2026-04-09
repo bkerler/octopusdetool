@@ -28,7 +28,9 @@ from octopusdetool import (
     get_smartmeter_data_folder,
     ensure_excel_template,
     get_default_output_path,
-    get_default_excel_path
+    get_default_excel_path,
+    save_to_json,
+    save_to_yaml
 )
 
 
@@ -136,17 +138,7 @@ class OctopusSmartMeterGUI:
         self.password_entry.config(state='normal')
         row += 1
         
-        # Account Number
-        ttk.Label(self.main_frame, text="Kundennummer:").grid(
-            row=row, column=0, sticky=tk.W, pady=5
-        )
-        self.account_var = tk.StringVar()
-        self.account_entry = ttk.Entry(self.main_frame, textvariable=self.account_var, width=60)
-        self.account_entry.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=5, padx=5)
-        self.account_entry.config(state='normal')
-        row += 1
-        
-        # Save Configuration Checkbox - right under account number
+        # Save Configuration Checkbox - right under password
         self.save_config_var = tk.BooleanVar(value=False)
         self.save_config_checkbox = ttk.Checkbutton(
             self.main_frame, text="Konfiguration in config.json speichern",
@@ -179,12 +171,12 @@ class OctopusSmartMeterGUI:
         
         # Output Format
         ttk.Label(output_frame, text="Format:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        self.output_format_var = tk.StringVar(value="csv")
+        self.output_format_var = tk.StringVar(value="excel")
         
         format_combo = ttk.Combobox(
             output_frame, 
             textvariable=self.output_format_var,
-            values=["csv", "hourly_csv", "excel"],
+            values=["excel", "csv", "json", "yaml"],
             state="readonly",
             width=20
         )
@@ -397,9 +389,14 @@ class OctopusSmartMeterGUI:
                 
                 self.email_var.set(config.get('email', ''))
                 self.password_var.set(config.get('password', ''))
-                self.account_var.set(config.get('account_number', ''))
                 self.excel_var.set(config.get('excel_file', str(get_default_excel_path())))
-                self.output_format_var.set(config.get('output_format', 'csv'))
+                # Validate output format, default to excel if invalid
+                valid_formats = ['excel', 'csv', 'json', 'yaml']
+                saved_format = config.get('output_format', 'excel')
+                if saved_format not in valid_formats:
+                    print(f"[DEBUG] Invalid format in config: {saved_format}, defaulting to excel")
+                    saved_format = 'excel'
+                self.output_format_var.set(saved_format)
                 # Default from date: 01.01.2024 or from config
                 default_from = config.get('from_date', '01.01.2024')
                 self.from_date_var.set(default_from)
@@ -471,7 +468,6 @@ class OctopusSmartMeterGUI:
         config = {
             'email': self.email_var.get(),
             'password': self.password_var.get(),
-            'account_number': self.account_var.get(),
             'excel_file': self.excel_var.get(),
             'output_format': self.output_format_var.get(),
             'from_date': self.from_date_var.get(),  # Store the from date
@@ -493,9 +489,7 @@ class OctopusSmartMeterGUI:
         if not self.password_var.get():
             messagebox.showerror("Fehler", "Passwort ist erforderlich!")
             return False
-        if not self.account_var.get():
-            messagebox.showerror("Fehler", "Kundennummer ist erforderlich!")
-            return False
+        # Kundennummer ist optional - wird automatisch ermittelt wenn nicht angegeben
         
         format_type = self.output_format_var.get()
         if format_type == "excel" and not self.excel_var.get():
@@ -533,8 +527,6 @@ class OctopusSmartMeterGUI:
         self.root.update()
         
         try:
-            account_number = self.account_var.get()
-            
             # Parse date range from UI (European format: DD.MM.YYYY)
             period_from = datetime.strptime(self.from_date_var.get(), "%d.%m.%Y")
             period_to = datetime.strptime(self.to_date_var.get(), "%d.%m.%Y")
@@ -584,6 +576,21 @@ class OctopusSmartMeterGUI:
                 if not client.authenticate():
                     raise Exception("Authentifizierung fehlgeschlagen! Überprüfen Sie Ihre E-Mail und Ihr Passwort.")
                 
+                # Auto-discover account number
+                self.status_var.set("Kundennummer wird ermittelt...")
+                self.root.update()
+                
+                accounts = client.get_accounts_from_viewer()
+                if not accounts:
+                    raise Exception("Kein Konto gefunden! Überprüfen Sie Ihre Zugangsdaten.")
+                if len(accounts) > 1:
+                    account_list = "\n".join([f"  - {acc.get('number', 'unknown')}" for acc in accounts])
+                    raise Exception(f"Mehrere Konten gefunden ({len(accounts)}). Bitte wählen Sie ein Konto aus:\n{account_list}")
+                
+                account_number = accounts[0].get('number')
+                self.status_var.set(f"Kundennummer gefunden: {account_number}")
+                self.root.update()
+                
                 self.status_var.set("Zähler werden ermittelt...")
                 self.root.update()
                 
@@ -598,12 +605,18 @@ class OctopusSmartMeterGUI:
                 self.status_var.set(f"Zähler für MALO {malo_number} gefunden, Daten werden abgerufen...")
                 self.root.update()
                 
-                # Fetch consumption data
+                # Progress callback function
+                def update_progress(count, page):
+                    self.status_var.set(f"Empfange Daten... {count} Einträge (Seite {page})")
+                    self.root.update()
+                
+                # Fetch consumption data with progress updates
                 new_readings = client.get_consumption_graphql(
                     property_id=property_id,
                     period_from=fetch_from,
                     period_to=fetch_to,
-                    fetch_all=True
+                    fetch_all=True,
+                    progress_callback=update_progress
                 )
                 
                 if not new_readings and not self.existing_data:
@@ -624,51 +637,98 @@ class OctopusSmartMeterGUI:
             unique_data = list(seen.values())
             unique_data.sort(key=lambda x: x['start'])
             
-            # Save to single consumption.csv
-            self.status_var.set(f"Speichere {len(unique_data)} Einträge in consumption.csv...")
-            self.root.update()
-            
-            with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(['start', 'end', 'consumption_kwh'])
-                for reading in unique_data:
-                    writer.writerow([
-                        format_datetime(reading['start']),
-                        format_datetime(reading['end']),
-                        reading['consumption_kwh']
-                    ])
-            
             # Update our data
             self.existing_data = unique_data
             if unique_data:
                 self.latest_timestamp = max(r['end'] for r in unique_data)
             
-            # Fill Excel if requested
+            # Save based on selected format
             format_type = self.output_format_var.get()
+            data_folder = get_smartmeter_data_folder()
+            
             if format_type == "excel":
+                # Save to CSV and fill Excel
+                self.status_var.set(f"Speichere {len(unique_data)} Einträge in consumption.csv...")
+                self.root.update()
+                
+                with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['start', 'end', 'consumption_kwh'])
+                    for reading in unique_data:
+                        writer.writerow([
+                            format_datetime(reading['start']),
+                            format_datetime(reading['end']),
+                            reading['consumption_kwh']
+                        ])
+                
                 excel_path = Path(self.excel_var.get()).resolve()
                 self.status_var.set("Excel-Vorlage wird gefüllt...")
                 self.root.update()
                 
                 success = fill_excel_template(unique_data, str(excel_path), str(excel_path))
-                docs_folder = get_documents_folder()
                 if success:
                     messagebox.showinfo(
                         "Erfolg", 
-                        f"Daten erfolgreich in Documents/smartmeter_data/ gespeichert!\n\n"
+                        f"Daten erfolgreich gespeichert!\n\n"
                         f"CSV: consumption.csv ({len(unique_data)} Einträge)\n"
                         f"Excel: {excel_path}"
                     )
                 else:
                     raise Exception("Excel-Vorlage konnte nicht gefüllt werden")
-            else:
-                docs_folder = get_documents_folder()
+                    
+            elif format_type == "csv":
+                # Save to CSV only
+                self.status_var.set(f"Speichere {len(unique_data)} Einträge in consumption.csv...")
+                self.root.update()
+                
+                with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
+                    writer = csv.writer(f)
+                    writer.writerow(['start', 'end', 'consumption_kwh'])
+                    for reading in unique_data:
+                        writer.writerow([
+                            format_datetime(reading['start']),
+                            format_datetime(reading['end']),
+                            reading['consumption_kwh']
+                        ])
+                
                 messagebox.showinfo(
                     "Erfolg",
-                    f"Daten erfolgreich in Documents/smartmeter_data/ gespeichert!\n\n"
+                    f"Daten erfolgreich gespeichert!\n\n"
                     f"CSV: consumption.csv\n"
                     f"Gesamteinträge: {len(unique_data)}"
                 )
+                
+            elif format_type == "json":
+                # Save to JSON
+                json_path = data_folder / "consumption.json"
+                self.status_var.set(f"Speichere {len(unique_data)} Einträge als JSON...")
+                self.root.update()
+                
+                if save_to_json(unique_data, json_path):
+                    messagebox.showinfo(
+                        "Erfolg",
+                        f"Daten erfolgreich gespeichert!\n\n"
+                        f"JSON: consumption.json\n"
+                        f"Gesamteinträge: {len(unique_data)}"
+                    )
+                else:
+                    raise Exception("Fehler beim Speichern als JSON")
+                    
+            elif format_type == "yaml":
+                # Save to YAML
+                yaml_path = data_folder / "consumption.yaml"
+                self.status_var.set(f"Speichere {len(unique_data)} Einträge als YAML...")
+                self.root.update()
+                
+                if save_to_yaml(unique_data, yaml_path):
+                    messagebox.showinfo(
+                        "Erfolg",
+                        f"Daten erfolgreich gespeichert!\n\n"
+                        f"YAML: consumption.yaml\n"
+                        f"Gesamteinträge: {len(unique_data)}"
+                    )
+                else:
+                    raise Exception("Fehler beim Speichern als YAML")
             
             # Show completion status
             self.status_var.set(f"Fertig! Daten in Documents/smartmeter_data/ ({len(unique_data)} Einträge)")

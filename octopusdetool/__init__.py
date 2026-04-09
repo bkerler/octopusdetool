@@ -9,6 +9,8 @@ from .octopusdetool import (
     ensure_excel_template,
     get_default_output_path,
     get_default_excel_path,
+    save_to_json,
+    save_to_yaml,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     'ensure_excel_template',
     'get_default_output_path',
     'get_default_excel_path',
+    'save_to_json',
+    'save_to_yaml',
 ]
