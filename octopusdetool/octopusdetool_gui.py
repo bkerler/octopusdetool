@@ -96,15 +96,15 @@ class _TeeStream:
 
 
 class OctopusSmartMeterGUI:
-    BASE_WINDOW_WIDTH = 700
-    BASE_WINDOW_HEIGHT = 600
+    BASE_WINDOW_WIDTH = 620
+    BASE_WINDOW_HEIGHT = 500
     WINDOW_SCREEN_FRACTION = 0.92
     WINDOW_EXTRA_WIDTH = 32
-    WINDOW_EXTRA_HEIGHT = 48
+    WINDOW_EXTRA_HEIGHT = 20
     BASE_FONT_SIZE = 10
     HEADER_FONT_SIZE = 12
     STATUS_FONT_SIZE = 9
-    BASE_PADDING = 20
+    BASE_PADDING = 12
     BASE_CALENDAR_WIDTH = 300
     BASE_CALENDAR_HEIGHT = 280
     MAX_UI_SCALE = 1.5
@@ -212,17 +212,20 @@ class OctopusSmartMeterGUI:
             print(f"Warning: Could not set application icon: {e}")
 
     def _detect_ui_scale(self):
-        """Scale the GUI up on higher-resolution screens."""
+        """Scale the GUI based on actual display DPI when available."""
         try:
-            screen_width = self.root.winfo_screenwidth()
-            screen_height = self.root.winfo_screenheight()
+            pixels_per_inch = float(self.root.winfo_fpixels('1i'))
         except tk.TclError:
             return 1.0
 
-        resolution_scale = min(screen_width / 1920, screen_height / 1080)
-        if resolution_scale < 1.15:
+        if pixels_per_inch <= 0:
             return 1.0
-        return min(resolution_scale, self.MAX_UI_SCALE)
+
+        # Tk uses 72 DPI as its logical baseline for scaling.
+        dpi_scale = pixels_per_inch / 96.0
+        if dpi_scale < 1.1:
+            return 1.0
+        return min(dpi_scale, self.MAX_UI_SCALE)
 
     def _scaled(self, value):
         return max(1, int(round(value * self.ui_scale)))
@@ -232,8 +235,6 @@ class OctopusSmartMeterGUI:
 
     def _configure_window(self):
         """Set a larger default window on high-resolution displays."""
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
         max_width, max_height = self._get_max_window_size()
         window_width = min(self._scaled(self.BASE_WINDOW_WIDTH), max_width)
         window_height = min(self._scaled(self.BASE_WINDOW_HEIGHT), max_height)
@@ -275,7 +276,9 @@ class OctopusSmartMeterGUI:
         window_height = min(max(self.root.winfo_height(), content_height), max_height)
 
         self._set_window_geometry(window_width, window_height)
-        self.root.minsize(window_width, window_height)
+        min_width = min(self._scaled(self.BASE_WINDOW_WIDTH), max_width)
+        min_height = min(self._scaled(self.BASE_WINDOW_HEIGHT), max_height)
+        self.root.minsize(min_width, min_height)
 
     def _configure_styles(self):
         """Apply a more modern visual system across ttk widgets."""
@@ -747,7 +750,7 @@ class OctopusSmartMeterGUI:
             width=25,
             style="Primary.TButton"
         )
-        self.get_data_btn.grid(row=row, column=2, sticky=tk.E, pady=(0, pad_medium))
+        self.get_data_btn.grid(row=row, column=2, sticky=tk.E, pady=0)
 
         self.on_format_changed()
     
