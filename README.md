@@ -4,7 +4,8 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 
 (c) B.Kerler (App) und B.Stahl (xlsx) 2026
 
-<img width="578" height="496" alt="image" src="https://github.com/user-attachments/assets/262456e5-1821-470a-bada-801520b5e9c9" />
+<img width="578" height="495" alt="image" src="https://github.com/user-attachments/assets/860ed85e-5555-4b84-a1ec-4787c903ac1a" />
+
 
 ## Funktionen
 
