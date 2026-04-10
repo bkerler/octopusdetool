@@ -1159,7 +1159,7 @@ class OctopusSmartMeterGUI:
                         meter_info = client.find_smart_meter(account_number)
                         
                         if not meter_info:
-                            raise Exception("No smart meter found for this account!\n\nPossible reasons:\n- Smart meter not yet commissioned\n- No electricity meter found\n- Check account number")
+                            raise Exception("Kein Smart Meter für diesen Account gefunden!\n\nPossible reasons:\n- Smart meter not yet commissioned\n- No electricity meter found\n- Check account number")
                         
                         malo_number, meter_id, property_id = meter_info
                         
@@ -1415,11 +1415,11 @@ class OctopusSmartMeterGUI:
                         meter_info = client.find_smart_meter(account_number)
                         if not meter_info:
                             raise Exception(
-                                "No smart meter found for this account!\n\n"
-                                "Possible reasons:\n"
-                                "- Smart meter not yet commissioned\n"
-                                "- No electricity meter found\n"
-                                "- Check account number"
+                                "Kein Smart Meter für diesen Account gefunden!\n\n"
+                                "Mögliche Gründe:\n"
+                                "- Smart meter noch nicht eingerichtet\n"
+                                "- Kein smart meter gefunden\n"
+                                "- Falsche Kundennummer"
                             )
 
                         malo_number, meter_id, property_id = meter_info

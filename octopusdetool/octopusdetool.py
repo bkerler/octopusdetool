@@ -1117,31 +1117,31 @@ def main():
             print()  # New line after progress
     
     if not new_readings and not existing_data:
-        print("\nNo consumption data found!")
-        print("\nPossible reasons:")
-        print("- The meter may not have smart meter functionality enabled yet")
-        print("- No readings have been received from the meter")
-        print("- The date range is outside the available data")
+        print("\nKeine Verbrauchsdaten gefunden!")
+        print("\nMögliche Gründe:")
+        print("- Der Stromzähler hat noch keine Smart-Meter Funktionalität")
+        print("- Es wurden keine Werte gefunden")
+        print("- Das Datum ist außerhalb der vorhandenen Daten")
         sys.exit(1)
     
     if new_readings:
-        print(f"\nFetched {len(new_readings)} new consumption intervals")
+        print(f"\n{len(new_readings)} neue Verbrauchsdatenintervalle gelesen")
         
         # Calculate total consumption
         total_kwh = sum(r["consumption_kwh"] for r in new_readings)
         print(f"Gesamtverbrauch neuer Daten: {total_kwh:.2f} kWh")
     else:
-        print("\nNo new data to fetch (everything already in CSV)")
+        print("\nEs wurden keine neuen Daten gefunden (alles bereits in der CSV enthalten)")
     
     # Merge existing and new data
     all_readings = existing_data + new_readings
     
     if not all_readings:
-        print("No data to save!")
+        print("Keine Daten zum Speichern gefunden!")
         sys.exit(1)
     
     # Remove duplicates and save
-    print(f"\nMerging data: {len(existing_data)} existing + {len(new_readings)} new = {len(all_readings)} total")
+    print(f"\nFasse Daten zusammen: {len(existing_data)} existierende + {len(new_readings)} neue = {len(all_readings)} total")
     
     # Save in requested format
     output_format = args.output_format
@@ -1151,7 +1151,7 @@ def main():
     final_data, _ = read_existing_csv(output_path.with_suffix('.csv'))
     
     # Show data summary
-    print(f"\nTotal data: {len(final_data)} readings")
+    print(f"\nInsgesamt: {len(final_data)} Verbrauchsdaten")
     if final_data:
         total_kwh = sum(r["consumption_kwh"] for r in final_data)
         print(f"Gesamtverbrauch in CSV: {total_kwh:.2f} kWh")
@@ -1169,9 +1169,9 @@ def main():
     if args.fill_excel:
         template_path = Path(args.fill_excel)
         if not template_path.exists():
-            print(f"\nError: Excel template not found: {template_path}")
+            print(f"\nFehler: Excel template nicht gefunden: {template_path}")
         else:
-            print(f"\nFilling Excel template from CSV data: {template_path}")
+            print(f"\nExcel wird mittels csv-Daten befüllt: {template_path}")
             success = fill_excel_template(
                 final_data, 
                 str(template_path), 
