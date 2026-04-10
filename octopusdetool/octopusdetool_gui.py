@@ -703,8 +703,8 @@ class OctopusSmartMeterGUI:
         self.from_calendar_btn.grid(row=0, column=2, sticky=tk.W, padx=(0, pad_medium))
 
         ttk.Label(self.date_frame, text="Bis:", style="Surface.TLabel").grid(row=0, column=3, sticky=tk.W, padx=(pad_medium, pad_small))
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%d.%m.%Y")
-        self.to_date_var = tk.StringVar(value=yesterday)
+        today = datetime.now().strftime("%d.%m.%Y")
+        self.to_date_var = tk.StringVar(value=today)
         self.to_date_entry = ttk.Entry(self.date_frame, textvariable=self.to_date_var, width=12)
         self.to_date_entry.grid(row=0, column=4, sticky=tk.W, padx=0)
         self.to_calendar_btn = tk.Button(
@@ -956,9 +956,8 @@ class OctopusSmartMeterGUI:
                 # Default from date: 01.01.2024 or from config
                 default_from = config.get('from_date', '01.01.2024')
                 self.from_date_var.set(default_from)
-                # To date is always yesterday (last complete day)
-                yesterday = (datetime.now() - timedelta(days=1)).strftime("%d.%m.%Y")
-                self.to_date_var.set(yesterday)
+                today = datetime.now().strftime("%d.%m.%Y")
+                self.to_date_var.set(today)
                 self.debug_var.set(config.get('debug', False))
                 
                 # Update UI based on loaded format

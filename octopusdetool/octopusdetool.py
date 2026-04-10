@@ -379,10 +379,10 @@ class OctopusGermanyClient:
             List of consumption readings with start, end, and consumption_kwh
         """
         # Safety: Never fetch data for current day or future - data may be incomplete
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today = get_today_start()
         yesterday_end = today - timedelta(seconds=1)
         
-        if period_to and period_to >= today:
+        if period_to and normalize_datetime(period_to) >= today:
             period_to = yesterday_end
             self._log_debug(f"Clamped period_to to yesterday: {period_to}")
         
@@ -414,14 +414,10 @@ class OctopusGermanyClient:
             
             # Add date filters if specified
             if period_from:
-                if period_from.tzinfo is None:
-                    period_from = period_from.replace(tzinfo=timezone(timedelta(hours=1)))  # Assume Berlin time
-                variables["startAt"] = period_from.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                variables["startAt"] = ensure_app_timezone(period_from).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
             
             if period_to:
-                if period_to.tzinfo is None:
-                    period_to = period_to.replace(tzinfo=timezone(timedelta(hours=1)))  # Assume Berlin time
-                variables["endAt"] = period_to.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                variables["endAt"] = ensure_app_timezone(period_to).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
             
             self._log_debug(f"Fetching page {page_count}, after={after_cursor}")
             
@@ -506,6 +502,24 @@ def format_datetime(dt: datetime) -> str:
     """Format datetime for CSV output (European format: DD.MM.YYYY HH:MM:SS)."""
     dt = normalize_datetime(dt)
     return dt.strftime("%d.%m.%Y %H:%M:%S")
+
+
+def ensure_app_timezone(dt: datetime) -> datetime:
+    """Interpret naive datetimes in the app timezone and convert aware datetimes to it."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=APP_TIMEZONE)
+    return dt.astimezone(APP_TIMEZONE)
+
+
+def get_today_start() -> datetime:
+    """Get the start of the current day in the app timezone as a naive datetime."""
+    return datetime.now(APP_TIMEZONE).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+        tzinfo=None
+    )
 
 
 def normalize_datetime(dt: datetime) -> datetime:
@@ -736,16 +750,16 @@ def fill_excel_template(readings: list, template_path: str, output_path: str):
 
 def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
     """
-    Read existing consumption.csv and return data plus latest timestamp.
+    Read existing consumption.csv and return data plus latest interval end.
     
     Returns:
-        Tuple of (existing_data, latest_timestamp)
+        Tuple of (existing_data, latest_interval_end)
     """
     if not csv_path.exists():
         return [], None
     
     existing_data = []
-    latest_timestamp = None
+    latest_interval_end = None
     
     try:
         with open(csv_path, 'r', newline='', encoding='utf-8') as f:
@@ -768,17 +782,17 @@ def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
                         'consumption_kwh': consumption
                     })
                     
-                    if latest_timestamp is None or end > latest_timestamp:
-                        latest_timestamp = end
+                    if latest_interval_end is None or end > latest_interval_end:
+                        latest_interval_end = end
                         
                 except (KeyError, ValueError) as e:
                     continue
         
         print(f"Read {len(existing_data)} existing readings from {csv_path}")
-        if latest_timestamp:
-            print(f"Latest data in CSV: {latest_timestamp}")
+        if latest_interval_end:
+            print(f"Latest interval end in CSV: {latest_interval_end}")
         
-        return existing_data, latest_timestamp
+        return existing_data, latest_interval_end
         
     except Exception as e:
         print(f"Error reading existing CSV: {e}")
@@ -995,11 +1009,11 @@ def main():
     # Create output directory if it doesn't exist
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
-    existing_data, latest_timestamp = read_existing_csv(output_path)
+    existing_data, latest_interval_end = read_existing_csv(output_path)
     
     # Determine date range for fetching new data
     # Never fetch data for the current day (data may be incomplete)
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = get_today_start()
     yesterday = today - timedelta(days=1)
     yesterday_end = yesterday + timedelta(days=1) - timedelta(seconds=1)
     
@@ -1011,9 +1025,9 @@ def main():
         fetch_to = yesterday_end
         print(f"\nNote: Limiting data fetch to yesterday ({yesterday.date()}) - current day data excluded")
     
-    if not fetch_from and latest_timestamp:
+    if not fetch_from and latest_interval_end:
         # Start from the latest data we have (minus 1 hour overlap to be safe)
-        fetch_from = latest_timestamp - timedelta(hours=1)
+        fetch_from = latest_interval_end - timedelta(hours=1)
         # But don't go beyond yesterday
         if fetch_from > yesterday_end:
             fetch_from = yesterday_end
@@ -1024,9 +1038,10 @@ def main():
     need_to_fetch = True
     if existing_data and not args.period_from and not args.period_to:
         # We have data and no specific date range requested by user
-        # Check if we already have data up to yesterday
-        if latest_timestamp and latest_timestamp.date() >= yesterday.date():
-            print(f"\nCSV already has data up to {latest_timestamp.date()}")
+        # Hourly intervals are [start, end), so yesterday is complete only if the
+        # last interval ends at or after today's midnight.
+        if latest_interval_end and latest_interval_end >= today:
+            print(f"\nCSV already has complete data up to {yesterday.date()}")
             print("Keine neuen Daten abzurufen. Verwenden Sie --period-from für erzwungenen Abruf.")
             need_to_fetch = False
             # Reset fetch_from since we don't need to fetch
