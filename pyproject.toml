@@ -33,7 +33,7 @@ requires = [
 test_requires = [
     "pytest",
 ]
-include_frameworks = ["tkinter"]
+# Tkinter is copied into Briefcase bundles explicitly by scripts/copy_tk_runtime.py.
 
 [tool.briefcase.app.octopusdetool.macOS]
 universal_build = true
