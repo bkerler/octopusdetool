@@ -27,17 +27,17 @@ test_sources = [
 requires = [
     "cryptography>=42.0.0",
     "openpyxl>=3.0.0",
+    "PySide6>=6.8",
     "requests>=2.28.0",
     "pyyaml>=6.0"
 ]
 test_requires = [
     "pytest",
 ]
-# Tkinter is copied into Briefcase bundles explicitly by scripts/copy_tk_runtime.py.
 
 [tool.briefcase.app.octopusdetool.macOS]
 universal_build = true
-# As of Pyside 6.8, PySide enforces a macOS 12 minimum on wheels.
+# As of PySide 6.8, PySide enforces a macOS 12 minimum on wheels.
 min_os_version = "12.0"
 requires = [
     "std-nslog~=1.0.3",
@@ -133,6 +133,7 @@ requires-python = ">= 3.10"
 dependencies = [
     "cryptography>=42.0.0",
     "openpyxl>=3.0.0",
+    "PySide6>=6.8",
     "requests>=2.28.0",
     "pyyaml>=6.0"
 ]
@@ -157,7 +158,8 @@ include = [
     "octopusdetool/",
     "octopusdetool/octopusdetool_gui.svg",
     "octopusdetool/octopusdetool_gui.ico",
-    "octopusdetool/octopusdetool_gui-*.png"
+    "octopusdetool/octopusdetool_gui-*.png",
+    "octopusdetool/octopusdetool_gui.ui"
 ]
 
 [tool.hatch.build.targets.wheel]

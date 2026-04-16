@@ -8,7 +8,5 @@ rm -rf build/
 rm -rf dist/
 rm -rf logs/
 python3 -m briefcase create macOS Xcode
-python3 scripts/copy_tk_runtime.py
 python3 -m briefcase build macOS Xcode
-python3 scripts/copy_tk_runtime.py
 python3 -m briefcase package macOS Xcode

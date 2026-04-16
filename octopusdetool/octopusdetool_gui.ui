@@ -1,0 +1,523 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>OctopusSmartMeterWindow</class>
+ <widget class="QWidget" name="OctopusSmartMeterWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>760</width>
+    <height>700</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>640</width>
+    <height>560</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>Octopus Energy Germany - Smartmeter Datenexport</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QWidget {
+    background-color: #f3f7fb;
+    color: #152230;
+    font: 10pt &quot;Segoe UI&quot;;
+}
+
+QFrame#heroFrame,
+QFrame#statusFrame,
+QGroupBox {
+    background-color: #ffffff;
+    border: 1px solid #d7e2ec;
+    border-radius: 12px;
+}
+
+QFrame#heroFrame,
+QFrame#statusFrame {
+    padding: 6px;
+}
+
+QGroupBox {
+    margin-top: 12px;
+    padding: 14px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 4px;
+    color: #152230;
+    font: 600 10pt &quot;Segoe UI&quot;;
+}
+
+QLabel#heroTitleLabel {
+    font: 700 16pt &quot;Segoe UI&quot;;
+    color: #152230;
+}
+
+QLabel#heroSubtitleLabel,
+QLabel#outputHintLabel,
+QLabel#statusTitleLabel {
+    color: #61758a;
+}
+
+QLabel#statusValueLabel {
+    color: #0f766e;
+    font: 600 10pt &quot;Segoe UI&quot;;
+}
+
+QLineEdit,
+QComboBox,
+QDateEdit {
+    background-color: #ffffff;
+    border: 1px solid #d7e2ec;
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+
+QComboBox::drop-down,
+QDateEdit::drop-down {
+    border: none;
+    width: 26px;
+}
+
+QPushButton {
+    background-color: #eef4f9;
+    border: 1px solid #d7e2ec;
+    border-radius: 10px;
+    padding: 9px 16px;
+}
+
+QPushButton:hover {
+    background-color: #d7e2ec;
+}
+
+QPushButton#fetchDataButton {
+    background-color: #0f766e;
+    border-color: #0f766e;
+    color: #ffffff;
+    font: 600 10pt &quot;Segoe UI&quot;;
+    min-height: 20px;
+    padding: 11px 18px;
+}
+
+QPushButton#fetchDataButton:hover {
+    background-color: #115e59;
+}
+
+QProgressBar {
+    background-color: #eef4f9;
+    border: 1px solid #d7e2ec;
+    border-radius: 8px;
+    min-height: 14px;
+    text-align: center;
+}
+
+QProgressBar::chunk {
+    background-color: #0f766e;
+    border-radius: 8px;
+}
+</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <property name="spacing">
+    <number>0</number>
+   </property>
+   <item>
+    <widget class="QScrollArea" name="scrollArea">
+     <property name="frameShape">
+      <enum>QFrame::NoFrame</enum>
+     </property>
+     <property name="widgetResizable">
+      <bool>true</bool>
+     </property>
+     <widget class="QWidget" name="scrollAreaWidgetContents">
+      <property name="geometry">
+       <rect>
+        <x>0</x>
+        <y>0</y>
+        <width>760</width>
+        <height>700</height>
+       </rect>
+      </property>
+      <layout class="QVBoxLayout" name="contentLayout">
+       <property name="leftMargin">
+        <number>18</number>
+       </property>
+       <property name="topMargin">
+        <number>18</number>
+       </property>
+       <property name="rightMargin">
+        <number>18</number>
+       </property>
+       <property name="bottomMargin">
+        <number>18</number>
+       </property>
+       <property name="spacing">
+        <number>14</number>
+       </property>
+       <item>
+        <widget class="QFrame" name="heroFrame">
+         <property name="frameShape">
+          <enum>QFrame::StyledPanel</enum>
+         </property>
+         <layout class="QVBoxLayout" name="heroLayout">
+          <property name="leftMargin">
+           <number>18</number>
+          </property>
+          <property name="topMargin">
+           <number>18</number>
+          </property>
+          <property name="rightMargin">
+           <number>18</number>
+          </property>
+          <property name="bottomMargin">
+           <number>18</number>
+          </property>
+          <property name="spacing">
+           <number>6</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="heroTitleLabel">
+            <property name="text">
+             <string>Octopus Energy Deutschland Smartmeter Datenexport</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="heroSubtitleLabel">
+            <property name="text">
+             <string>(c) B.Kerler / S. Stahl 2026</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="accountGroupBox">
+         <property name="title">
+          <string>Zugang &amp; Einstellungen</string>
+         </property>
+         <layout class="QGridLayout" name="accountLayout">
+          <property name="horizontalSpacing">
+           <number>12</number>
+          </property>
+          <property name="verticalSpacing">
+           <number>10</number>
+          </property>
+          <item row="0" column="0">
+           <widget class="QLabel" name="emailLabel">
+            <property name="text">
+             <string>E-Mail:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1" colspan="2">
+           <widget class="QLineEdit" name="emailLineEdit">
+            <property name="clearButtonEnabled">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="passwordLabel">
+            <property name="text">
+             <string>Passwort:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLineEdit" name="passwordLineEdit">
+            <property name="echoMode">
+             <enum>QLineEdit::Password</enum>
+            </property>
+            <property name="clearButtonEnabled">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="2">
+           <widget class="QCheckBox" name="showPasswordCheckBox">
+            <property name="text">
+             <string>Passwort anzeigen</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0" colspan="3">
+           <widget class="QCheckBox" name="saveConfigCheckBox">
+            <property name="text">
+             <string>Konfiguration in config.json speichern</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0" colspan="3">
+           <widget class="QCheckBox" name="debugCheckBox">
+            <property name="text">
+             <string>Debug-Ausgabe in Dokumente/smartmeter_data/log.txt speichern</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="outputGroupBox">
+         <property name="title">
+          <string>Ausgabeoptionen</string>
+         </property>
+         <layout class="QGridLayout" name="outputLayout">
+          <property name="horizontalSpacing">
+           <number>12</number>
+          </property>
+          <property name="verticalSpacing">
+           <number>10</number>
+          </property>
+          <item row="0" column="0">
+           <widget class="QLabel" name="outputFormatLabel">
+            <property name="text">
+             <string>Format:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QComboBox" name="outputFormatComboBox">
+            <item>
+             <property name="text">
+              <string>excel</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>csv</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>json</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>yaml</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="outputFileLabel">
+            <property name="text">
+             <string>Dateiname:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <layout class="QHBoxLayout" name="outputFileRowLayout">
+            <property name="spacing">
+             <number>10</number>
+            </property>
+            <item>
+             <widget class="QLineEdit" name="outputFileLineEdit">
+              <property name="clearButtonEnabled">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QPushButton" name="browseOutputButton">
+              <property name="text">
+               <string>Speichern unter</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item row="2" column="0" colspan="2">
+           <widget class="QLabel" name="outputHintLabel">
+            <property name="text">
+             <string>Der Dateiname wird automatisch auf das gewählte Format abgestimmt.</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="dateGroupBox">
+         <property name="title">
+          <string>Datumsbereich</string>
+         </property>
+         <layout class="QHBoxLayout" name="dateLayout">
+          <property name="spacing">
+           <number>12</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="fromDateLabel">
+            <property name="text">
+             <string>Von:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QDateEdit" name="fromDateEdit">
+            <property name="calendarPopup">
+             <bool>true</bool>
+            </property>
+            <property name="displayFormat">
+             <string>dd.MM.yyyy</string>
+            </property>
+          </widget>
+          </item>
+          <item>
+           <spacer name="dateSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QLabel" name="toDateLabel">
+            <property name="text">
+             <string>Bis:</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QDateEdit" name="toDateEdit">
+            <property name="calendarPopup">
+             <bool>true</bool>
+            </property>
+            <property name="displayFormat">
+             <string>dd.MM.yyyy</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QFrame" name="statusFrame">
+         <property name="frameShape">
+          <enum>QFrame::StyledPanel</enum>
+         </property>
+         <layout class="QVBoxLayout" name="statusLayout">
+          <property name="leftMargin">
+           <number>18</number>
+          </property>
+          <property name="topMargin">
+           <number>14</number>
+          </property>
+          <property name="rightMargin">
+           <number>18</number>
+          </property>
+          <property name="bottomMargin">
+           <number>14</number>
+          </property>
+          <property name="spacing">
+           <number>4</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="statusTitleLabel">
+            <property name="text">
+             <string>Status</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="statusValueLabel">
+            <property name="text">
+             <string>Bereit</string>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QProgressBar" name="progressBar">
+         <property name="value">
+          <number>0</number>
+         </property>
+         <property name="textVisible">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="buttonRowLayout">
+         <item>
+          <spacer name="buttonSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="fetchDataButton">
+           <property name="text">
+            <string>Daten vom Server abrufen</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <spacer name="bottomSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

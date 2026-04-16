@@ -1,9 +1,9 @@
 export LC_ALL=en_US.utf8
 sudo apt install docker.io docker-buildx -y
-pip3 install briefcase
+python3 -m pip install briefcase
 rm -rf build/
 rm -rf dist/
 rm -rf logs/
-briefcase create linux flatpak
-briefcase build linux flatpak
-briefcase package linux flatpak
+python3 -m briefcase create linux flatpak
+python3 -m briefcase build linux flatpak
+python3 -m briefcase package linux flatpak
