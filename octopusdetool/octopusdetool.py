@@ -651,14 +651,25 @@ class OctopusGermanyClient:
         self.password = password
         self.token = None
         self.debug = debug
+        self.last_error_kind: str | None = None
+        self.last_error_message: str | None = None
 
     def _log_debug(self, message: str):
         """Print debug message if debug mode is enabled."""
         if self.debug:
             print(f"[DEBUG] {message}")
 
+    def _clear_last_error(self) -> None:
+        self.last_error_kind = None
+        self.last_error_message = None
+
+    def _set_last_error(self, kind: str, message: str) -> None:
+        self.last_error_kind = kind
+        self.last_error_message = message
+
     def authenticate(self) -> bool:
         """Authenticate and get JWT token."""
+        self._clear_last_error()
         variables = {
             "email": self.email,
             "password": self.password
@@ -695,18 +706,25 @@ class OctopusGermanyClient:
             data = response.json()
             
             if "errors" in data:
-                print(f"Authentifizierungsfehler: {data['errors']}")
+                error_message = f"Authentifizierungsfehler: {data['errors']}"
+                self._set_last_error("auth", error_message)
+                print(error_message)
                 return False
             
             self.token = data["data"]["obtainKrakenToken"]["token"]
+            self._clear_last_error()
             self._log_debug(f"Got token (first 20 chars): {self.token[:20]}...")
             return True
             
         except requests.exceptions.RequestException as e:
-            print(f"Netzwerkfehler bei der Authentifizierung: {e}")
+            error_message = f"Netzwerkfehler bei der Authentifizierung: {e}"
+            self._set_last_error("network", error_message)
+            print(error_message)
             return False
         except (KeyError, TypeError) as e:
-            print(f"Unerwartetes Antwortformat: {e}")
+            error_message = f"Unerwartetes Antwortformat: {e}"
+            self._set_last_error("response", error_message)
+            print(error_message)
             self._log_debug(f"Response: {response.text}")
             return False
 
@@ -746,14 +764,19 @@ class OctopusGermanyClient:
             data = response.json()
             
             if "errors" in data and not self.debug:
-                print(f"GraphQL errors: {data['errors']}")
+                error_message = f"GraphQL errors: {data['errors']}"
+                self._set_last_error("graphql", error_message)
+                print(error_message)
                 # Return partial data if available
                 return data.get("data", {})
             
+            self._clear_last_error()
             return data.get("data", {})
             
         except requests.exceptions.RequestException as e:
-            print(f"Netzwerkfehler: {e}")
+            error_message = f"Netzwerkfehler: {e}"
+            self._set_last_error("network", error_message)
+            print(error_message)
             return {}
 
     def get_account_details(self, account_number: str) -> dict:

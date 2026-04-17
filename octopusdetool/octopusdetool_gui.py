@@ -1935,6 +1935,16 @@ QListView::item:selected {
                         )
 
                         if not client.authenticate():
+                            if client.last_error_kind == "network":
+                                raise Exception(
+                                    "Keine Internetverbindung erkannt oder Netzwerkfehler bei der Anmeldung. "
+                                    "Bitte Verbindung pruefen und erneut versuchen."
+                                )
+                            if client.last_error_kind == "response":
+                                raise Exception(
+                                    "Der Octopus-Server hat unerwartet geantwortet. "
+                                    "Bitte spaeter erneut versuchen."
+                                )
                             raise Exception(
                                 "Authentifizierung fehlgeschlagen! Ueberpruefen Sie Ihre E-Mail und Ihr Passwort."
                             )
@@ -1943,6 +1953,11 @@ QListView::item:selected {
                         accounts = client.get_accounts_from_viewer()
 
                         if not accounts:
+                            if client.last_error_kind == "network":
+                                raise Exception(
+                                    "Keine Internetverbindung erkannt oder Netzwerkfehler beim Laden des Kontos. "
+                                    "Bitte Verbindung pruefen und erneut versuchen."
+                                )
                             raise Exception("Kein Konto gefunden! Ueberpruefen Sie Ihre Zugangsdaten.")
 
                         if len(accounts) > 1:
@@ -1971,6 +1986,11 @@ QListView::item:selected {
                             raise Exception("Kundendaten konnten nicht geladen werden")
                         meter_info = client.find_smart_meter(account_number)
                         if not meter_info:
+                            if client.last_error_kind == "network":
+                                raise Exception(
+                                    "Keine Internetverbindung erkannt oder Netzwerkfehler beim Laden der Zaehlerdaten. "
+                                    "Bitte Verbindung pruefen und erneut versuchen."
+                                )
                             raise Exception(
                                 "Kein Smart Meter fuer diesen Account gefunden!\n\n"
                                 "Moegliche Gruende:\n"
@@ -1998,6 +2018,12 @@ QListView::item:selected {
                             fetch_all=True,
                             progress_callback=update_progress,
                         )
+
+                        if client.last_error_kind == "network":
+                            raise Exception(
+                                "Keine Internetverbindung erkannt oder Netzwerkfehler beim Abrufen der Verbrauchsdaten. "
+                                "Bitte Verbindung pruefen und erneut versuchen."
+                            )
 
                         if not new_readings and not self.existing_data:
                             raise Exception(
