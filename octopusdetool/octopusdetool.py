@@ -437,21 +437,40 @@ def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
     if not target.exists():
         resource = _get_bundled_excel_template_resource(tariff_type)
         if resource.is_file():
-            with package_resources.as_file(resource) as source_path:
-                shutil.copy2(source_path, target)
-            print(f"Excel-Vorlage kopiert nach: {target}")
+            try:
+                with package_resources.as_file(resource) as source_path:
+                    shutil.copy2(source_path, target)
+                print(f"Excel-Vorlage kopiert nach: {target}")
+            except OSError:
+                pass
         elif tariff_type == TARIFF_INTELLIGENT_HEAT:
             stock_resource = _get_bundled_excel_template_resource(TARIFF_INTELLIGENT_GO)
             if stock_resource.is_file():
-                with package_resources.as_file(stock_resource) as stock_source_path:
-                    create_heat_excel_template(stock_source_path, target)
-                print(f"Heat-Excel-Vorlage erzeugt nach: {target}")
+                try:
+                    with package_resources.as_file(stock_resource) as stock_source_path:
+                        create_heat_excel_template(stock_source_path, target)
+                    print(f"Heat-Excel-Vorlage erzeugt nach: {target}")
+                except OSError:
+                    pass
 
     if target.exists():
         return target
 
+    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+        stock_template = get_bundled_excel_template_path(TARIFF_INTELLIGENT_GO)
+        if stock_template.exists():
+            try:
+                create_heat_excel_template(stock_template, target)
+                print(f"Heat-Excel-Vorlage erzeugt nach: {target}")
+                return target
+            except OSError:
+                pass
+
     source = get_bundled_excel_template_path(tariff_type)
-    return source if source.exists() else target
+    if source.exists():
+        return source
+
+    return target
 
 
 def get_default_output_path() -> Path:
