@@ -9,6 +9,7 @@ and outputs to CSV format. Can also fill German electricity tariff Excel templat
 import argparse
 import csv
 import ctypes
+import importlib.resources as package_resources
 import json
 import os
 import platform
@@ -110,6 +111,20 @@ def get_bundled_excel_template_path(tariff_type: str = TARIFF_INTELLIGENT_GO) ->
         else EXCEL_TEMPLATE_FILENAME
     )
     return Path(__file__).parent / filename
+
+
+def _get_bundled_excel_template_filename(tariff_type: str) -> str:
+    return (
+        HEAT_EXCEL_TEMPLATE_FILENAME
+        if tariff_type == TARIFF_INTELLIGENT_HEAT
+        else EXCEL_TEMPLATE_FILENAME
+    )
+
+
+def _get_bundled_excel_template_resource(tariff_type: str):
+    return package_resources.files("octopusdetool").joinpath(
+        _get_bundled_excel_template_filename(tariff_type)
+    )
 
 
 def get_documents_folder() -> Path:
@@ -407,20 +422,27 @@ def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
     """Copy the requested Excel template to smartmeter_data if it doesn't exist."""
     smartmeter_folder = ensure_smartmeter_data_folder()
 
-    source = get_bundled_excel_template_path(tariff_type)
-    target = smartmeter_folder / source.name
+    source_name = _get_bundled_excel_template_filename(tariff_type)
+    target = smartmeter_folder / source_name
 
     if not target.exists():
-        if source.exists():
-            shutil.copy2(source, target)
+        resource = _get_bundled_excel_template_resource(tariff_type)
+        if resource.is_file():
+            with package_resources.as_file(resource) as source_path:
+                shutil.copy2(source_path, target)
             print(f"Excel-Vorlage kopiert nach: {target}")
         elif tariff_type == TARIFF_INTELLIGENT_HEAT:
-            stock_source = get_bundled_excel_template_path(TARIFF_INTELLIGENT_GO)
-            if stock_source.exists():
-                create_heat_excel_template(stock_source, target)
+            stock_resource = _get_bundled_excel_template_resource(TARIFF_INTELLIGENT_GO)
+            if stock_resource.is_file():
+                with package_resources.as_file(stock_resource) as stock_source_path:
+                    create_heat_excel_template(stock_source_path, target)
                 print(f"Heat-Excel-Vorlage erzeugt nach: {target}")
 
-    return target if target.exists() else source
+    if target.exists():
+        return target
+
+    source = get_bundled_excel_template_path(tariff_type)
+    return source if source.exists() else target
 
 
 def get_default_output_path() -> Path:
