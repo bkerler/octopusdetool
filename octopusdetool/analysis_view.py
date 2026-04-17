@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
 from PySide6.QtCharts import (
@@ -20,33 +20,22 @@ from PySide6.QtWidgets import QToolTip
 class DisplayBucket:
     axis_label: str
     tooltip_label: str
-    go_kwh: float = 0.0
-    standard_kwh: float = 0.0
-    high_kwh: float = 0.0
+    rate_values_kwh: dict[str, float] = field(default_factory=dict)
 
     @property
     def total_kwh(self) -> float:
-        return self.go_kwh + self.standard_kwh + self.high_kwh
+        return sum(self.rate_values_kwh.values())
 
-    def go_cost_eur(self, tariff_go_ct: float) -> float:
-        return self.go_kwh * tariff_go_ct / 100.0
+    def rate_kwh(self, rate_name: str) -> float:
+        return self.rate_values_kwh.get(rate_name, 0.0)
 
-    def standard_cost_eur(self, tariff_standard_ct: float) -> float:
-        return self.standard_kwh * tariff_standard_ct / 100.0
+    def rate_cost_eur(self, rate_name: str, rate_ct: float) -> float:
+        return self.rate_kwh(rate_name) * rate_ct / 100.0
 
-    def high_cost_eur(self, tariff_high_ct: float) -> float:
-        return self.high_kwh * tariff_high_ct / 100.0
-
-    def total_cost_eur(
-        self,
-        tariff_go_ct: float,
-        tariff_standard_ct: float,
-        tariff_high_ct: float = 0.0,
-    ) -> float:
-        return (
-            self.go_cost_eur(tariff_go_ct)
-            + self.standard_cost_eur(tariff_standard_ct)
-            + self.high_cost_eur(tariff_high_ct)
+    def total_cost_eur(self, rate_prices_ct: dict[str, float]) -> float:
+        return sum(
+            self.rate_cost_eur(rate_name, rate_prices_ct.get(rate_name, 0.0))
+            for rate_name in self.rate_values_kwh
         )
 
 
@@ -55,12 +44,8 @@ class TariffChartView(QChartView):
         super().__init__(parent)
         self._buckets: list[DisplayBucket] = []
         self._show_currency = False
-        self._tariff_go_ct = 0.0
-        self._tariff_standard_ct = 0.0
-        self._tariff_high_ct = 0.0
-        self._go_label = "Tarif Go"
-        self._standard_label = "Tarif Standard"
-        self._high_label = "Tarif Hoch"
+        self._rate_order: list[str] = []
+        self._rate_prices_ct: dict[str, float] = {}
         self._category_axis_title = ""
         self._value_axis_title = ""
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -73,70 +58,58 @@ class TariffChartView(QChartView):
         buckets: Sequence[DisplayBucket],
         *,
         show_currency: bool,
-        tariff_go_ct: float,
-        tariff_standard_ct: float,
-        tariff_high_ct: float,
-        go_label: str,
-        standard_label: str,
-        high_label: str,
+        rate_order: Sequence[str],
+        rate_prices_ct: dict[str, float],
         category_axis_title: str,
         value_axis_title: str,
     ) -> None:
         self._buckets = list(buckets)
         self._show_currency = show_currency
-        self._tariff_go_ct = tariff_go_ct
-        self._tariff_standard_ct = tariff_standard_ct
-        self._tariff_high_ct = tariff_high_ct
-        self._go_label = go_label
-        self._standard_label = standard_label
-        self._high_label = high_label
+        self._rate_order = list(rate_order)
+        self._rate_prices_ct = dict(rate_prices_ct)
         self._category_axis_title = category_axis_title
         self._value_axis_title = value_axis_title
 
         chart = self._create_chart()
         self.setChart(chart)
 
-        categories = [bucket.axis_label for bucket in self._buckets]
-        if not categories:
-            categories = [""]
-
-        go_values = [
-            bucket.go_cost_eur(tariff_go_ct) if show_currency else bucket.go_kwh
-            for bucket in self._buckets
-        ]
-        standard_values = [
-            bucket.standard_cost_eur(tariff_standard_ct) if show_currency else bucket.standard_kwh
-            for bucket in self._buckets
-        ]
-        high_values = [
-            bucket.high_cost_eur(tariff_high_ct) if show_currency else bucket.high_kwh
-            for bucket in self._buckets
+        categories = [bucket.axis_label for bucket in self._buckets] or [""]
+        palette = [
+            "#6f4df6",
+            "#e98bff",
+            "#ff8a5b",
+            "#48c7ff",
+            "#a9e34b",
+            "#ffcf5a",
         ]
 
-        go_set = QBarSet(go_label)
-        go_set.setColor(QColor("#6f4df6"))
-        go_set.setBorderColor(QColor("#6f4df6"))
-        go_set.append(go_values or [0.0])
-
-        standard_set = QBarSet(standard_label)
-        standard_set.setColor(QColor("#e98bff"))
-        standard_set.setBorderColor(QColor("#e98bff"))
-        standard_set.append(standard_values or [0.0])
-
-        high_set = QBarSet(high_label)
-        high_set.setColor(QColor("#ff8a5b"))
-        high_set.setBorderColor(QColor("#ff8a5b"))
-        high_set.append(high_values or [0.0])
-
-        go_set.hovered.connect(self._on_bar_hovered)
-        standard_set.hovered.connect(self._on_bar_hovered)
-        high_set.hovered.connect(self._on_bar_hovered)
-
+        rate_series_values: list[list[float]] = []
         series = QStackedBarSeries()
-        series.append(go_set)
-        series.append(standard_set)
-        if any(value > 0 for value in high_values):
-            series.append(high_set)
+        for index, rate_name in enumerate(self._rate_order):
+            rate_values = [
+                bucket.rate_cost_eur(rate_name, self._rate_prices_ct.get(rate_name, 0.0))
+                if show_currency
+                else bucket.rate_kwh(rate_name)
+                for bucket in self._buckets
+            ]
+            rate_series_values.append(rate_values)
+
+            bar_set = QBarSet(rate_name)
+            color = QColor(palette[index % len(palette)])
+            bar_set.setColor(color)
+            bar_set.setBorderColor(color)
+            bar_set.append(rate_values or [0.0])
+            bar_set.hovered.connect(self._on_bar_hovered)
+            if any(value > 0 for value in rate_values):
+                series.append(bar_set)
+
+        if not series.barSets():
+            empty_set = QBarSet("Keine Daten")
+            empty_set.setColor(QColor("#54408f"))
+            empty_set.setBorderColor(QColor("#54408f"))
+            empty_set.append([0.0] * len(categories))
+            empty_set.hovered.connect(self._on_bar_hovered)
+            series.append(empty_set)
 
         chart.addSeries(series)
 
@@ -150,11 +123,8 @@ class TariffChartView(QChartView):
         axis_y.setGridLineColor(QColor("#54408f"))
         axis_y.setLabelFormat("%.2f" if show_currency else "%.1f")
         max_value = (
-            max(
-                (go + standard + high)
-                for go, standard, high in zip(go_values, standard_values, high_values, strict=False)
-            )
-            if self._buckets
+            max(sum(values) for values in zip(*rate_series_values, strict=False))
+            if self._buckets and rate_series_values
             else 0.0
         )
         axis_y.setRange(0.0, max(1.0, max_value * 1.15))
@@ -224,36 +194,20 @@ class TariffChartView(QChartView):
         bucket = self._buckets[index]
         lines = [bucket.tooltip_label]
         if self._show_currency:
-            total_value = bucket.total_cost_eur(
-                self._tariff_go_ct,
-                self._tariff_standard_ct,
-                self._tariff_high_ct,
-            )
-            lines.append(f"Gesamt: {self._format_decimal(total_value, 2)} €")
-            if bucket.go_kwh:
-                lines.append(
-                    f"{self._go_label}: {self._format_decimal(bucket.go_cost_eur(self._tariff_go_ct), 2)} €"
-                )
-            if bucket.standard_kwh:
-                lines.append(
-                    f"{self._standard_label}: "
-                    f"{self._format_decimal(bucket.standard_cost_eur(self._tariff_standard_ct), 2)} €"
-                )
-            if bucket.high_kwh:
-                lines.append(
-                    f"{self._high_label}: "
-                    f"{self._format_decimal(bucket.high_cost_eur(self._tariff_high_ct), 2)} €"
-                )
+            lines.append(f"Gesamt: {self._format_decimal(bucket.total_cost_eur(self._rate_prices_ct), 2)} EUR")
+            for rate_name in self._rate_order:
+                rate_kwh = bucket.rate_kwh(rate_name)
+                if rate_kwh:
+                    lines.append(
+                        f"{rate_name}: "
+                        f"{self._format_decimal(bucket.rate_cost_eur(rate_name, self._rate_prices_ct.get(rate_name, 0.0)), 2)} EUR"
+                    )
         else:
             lines.append(f"Gesamt: {self._format_decimal(bucket.total_kwh, 3)} kWh")
-            if bucket.go_kwh:
-                lines.append(f"{self._go_label}: {self._format_decimal(bucket.go_kwh, 3)} kWh")
-            if bucket.standard_kwh:
-                lines.append(
-                    f"{self._standard_label}: {self._format_decimal(bucket.standard_kwh, 3)} kWh"
-                )
-            if bucket.high_kwh:
-                lines.append(f"{self._high_label}: {self._format_decimal(bucket.high_kwh, 3)} kWh")
+            for rate_name in self._rate_order:
+                rate_kwh = bucket.rate_kwh(rate_name)
+                if rate_kwh:
+                    lines.append(f"{rate_name}: {self._format_decimal(rate_kwh, 3)} kWh")
 
         QToolTip.showText(QCursor.pos(), "\n".join(lines), self)
 
