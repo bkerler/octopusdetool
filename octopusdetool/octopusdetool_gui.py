@@ -68,9 +68,11 @@ from octopusdetool.octopusdetool import (
     TARIFF_INTELLIGENT_HEAT,
     TariffAgreement,
     classify_tariff_zone,
+    detect_excel_template_type,
     ensure_excel_template,
     fill_excel_template,
     format_datetime,
+    get_default_excel_path,
     get_default_tariff_settings_for_type,
     get_default_output_path,
     get_smartmeter_data_folder,
@@ -916,6 +918,23 @@ QListView::item:selected {
         config[LAST_TARIFF_CODE_CONFIG_KEY] = code
         self._write_config(config)
 
+    def _persist_manual_tariff_selection(self, tariff_type: str) -> None:
+        get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
+
+        if CONFIG_FILE.exists():
+            try:
+                config, _migrated = self._read_config_with_migration()
+            except Exception:
+                config = {}
+        else:
+            config = {}
+
+        if config.get(TARIFF_TYPE_CONFIG_KEY) == tariff_type:
+            return
+
+        config[TARIFF_TYPE_CONFIG_KEY] = tariff_type
+        self._write_config(config)
+
     def _toggle_password_visibility(self, checked: bool) -> None:
         self.password_line_edit.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
@@ -968,6 +987,8 @@ QListView::item:selected {
         return OUTPUT_EXTENSIONS.get(format_type, ".csv")
 
     def _get_default_output_path(self, format_type: str) -> Path:
+        if format_type == "excel":
+            return get_default_excel_path(self.current_tariff_type)
         return get_smartmeter_data_folder() / f"smartmeter_daten{self._get_extension_for_format(format_type)}"
 
     def _get_file_filter_for_format(self, format_type: str) -> str:
@@ -1018,6 +1039,7 @@ QListView::item:selected {
         tariff_high_ct: float,
         base_price_eur: float,
     ) -> None:
+        previous_tariff_type = self.current_tariff_type
         self.current_tariff_type = tariff_type
         self.tariff_type_combo.blockSignals(True)
         self.tariff_type_combo.setCurrentText(tariff_type)
@@ -1027,6 +1049,19 @@ QListView::item:selected {
         self.tariff_high_line_edit.setText(f"{tariff_high_ct:.2f}")
         self.base_price_line_edit.setText(f"{base_price_eur:.2f}")
         self._apply_tariff_type_ui()
+        self._sync_default_excel_output_path(previous_tariff_type)
+
+    def _sync_default_excel_output_path(self, previous_tariff_type: str) -> None:
+        if self.output_format_combo.currentText() != "excel":
+            return
+
+        current_output_path = self._get_normalized_output_path("excel")
+        if current_output_path in {
+            get_default_excel_path(previous_tariff_type),
+            get_default_excel_path(TARIFF_INTELLIGENT_GO),
+            get_default_excel_path(TARIFF_INTELLIGENT_HEAT),
+        }:
+            self.output_file_line_edit.setText(str(self._get_default_output_path("excel")))
 
     def _apply_tariff_type_ui(self) -> None:
         is_heat = self.current_tariff_type == TARIFF_INTELLIGENT_HEAT
@@ -1155,6 +1190,7 @@ QListView::item:selected {
             return
 
         self._set_tariff_inputs(*values)
+        self._persist_manual_tariff_selection(values[0])
         self._refresh_analysis_view()
         self.save_config(force=True)
 
@@ -1169,10 +1205,11 @@ QListView::item:selected {
 
     def _apply_tariff_agreement(self, agreement: TariffAgreement | None) -> None:
         if agreement is None:
-            self.current_tariff_code = ""
+            self.current_tariff_code = "None"
             self.current_tariff_valid_from = ""
             self.current_tariff_valid_to = ""
-            self.tariff_code_line_edit.clear()
+            self.tariff_code_line_edit.setText("None")
+            self._persist_requested_tariff_code("None")
             return
 
         self.current_tariff_code = agreement.code
@@ -1609,6 +1646,13 @@ QListView::item:selected {
             self.output_format_combo.setCurrentText(saved_format)
             self.output_format_combo.blockSignals(False)
             self.last_output_format = saved_format
+            saved_tariff_type = config.get(TARIFF_TYPE_CONFIG_KEY, TARIFF_INTELLIGENT_GO)
+            saved_code = config.get(LAST_TARIFF_CODE_CONFIG_KEY, "None")
+            if saved_code not in {"", "None", None}:
+                inferred_tariff_type = self._resolve_tariff_type_from_code(saved_code)
+                if inferred_tariff_type is not None:
+                    saved_tariff_type = inferred_tariff_type
+            self.current_tariff_type = saved_tariff_type
 
             if config_saving_enabled:
                 saved_output_file = config.get("output_file") or config.get("excel_file")
@@ -1622,7 +1666,6 @@ QListView::item:selected {
             self._set_date_from_string(self.from_date_edit, config.get("from_date", "01.01.2024"), QDate(2024, 1, 1))
             self.to_date_edit.setDate(QDate.currentDate())
             self._has_saved_base_price = "monthly_base_price_eur" in config
-            saved_tariff_type = config.get(TARIFF_TYPE_CONFIG_KEY, TARIFF_INTELLIGENT_GO)
             self._set_tariff_inputs(
                 saved_tariff_type,
                 self._get_config_decimal(
@@ -1655,8 +1698,8 @@ QListView::item:selected {
                     ),
                 ),
             )
-            self.current_tariff_code = config.get(LAST_TARIFF_CODE_CONFIG_KEY, "")
-            self.tariff_code_line_edit.setText(self.current_tariff_code)
+            self.current_tariff_code = saved_code if saved_code not in {None, ""} else "None"
+            self.tariff_code_line_edit.setText("" if self.current_tariff_code == "None" else self.current_tariff_code)
 
             self.on_format_changed(saved_format)
             self._refresh_analysis_view()
@@ -1750,7 +1793,7 @@ QListView::item:selected {
             "debug": self.debug_checkbox.isChecked(),
             AUTO_OUTPUT_FLAG: self.auto_output_checkbox.isChecked(),
             TARIFF_TYPE_CONFIG_KEY: tariff_type,
-            LAST_TARIFF_CODE_CONFIG_KEY: self.current_tariff_code,
+            LAST_TARIFF_CODE_CONFIG_KEY: self.current_tariff_code or "None",
             "tariff_go_ct": tariff_go_ct,
             "tariff_standard_ct": tariff_standard_ct,
             "tariff_heat_low_ct": tariff_go_ct if tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_HEAT_LOW_CT,
@@ -1996,20 +2039,29 @@ QListView::item:selected {
                             current_tariff_values = self._get_tariff_values(show_error=False)
                             if current_tariff_values is None:
                                 raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
-                            current_tariff_type, tariff_go_ct, tariff_standard_ct, _tariff_high_ct, monthly_base_price_eur = current_tariff_values
-                            if current_tariff_type == TARIFF_INTELLIGENT_HEAT:
-                                raise Exception(
-                                    "Excel-Ausgabe wird fuer den Tarif 'Intelligent Heat' aktuell noch nicht unterstuetzt."
-                                )
+                            current_tariff_type, tariff_go_ct, tariff_standard_ct, tariff_high_ct, monthly_base_price_eur = current_tariff_values
+
+                            template_path = output_path
+                            if output_path.exists():
+                                existing_template_type = detect_excel_template_type(output_path)
+                                if existing_template_type != current_tariff_type:
+                                    raise Exception(
+                                        "Die ausgewaehlte Excel-Datei passt nicht zum aktuellen Tarifmodell. "
+                                        f"Datei: {existing_template_type}, aktueller Tarif: {current_tariff_type}."
+                                    )
+                            else:
+                                template_path = ensure_excel_template(current_tariff_type)
 
                             self._set_status("Excel-Datei wird gefuellt...", update=True)
                             success = fill_excel_template(
                                 unique_data,
-                                str(output_path),
+                                str(template_path),
                                 str(output_path),
                                 tariff_go_ct=tariff_go_ct,
                                 tariff_standard_ct=tariff_standard_ct,
+                                tariff_high_ct=tariff_high_ct,
                                 monthly_base_price_eur=monthly_base_price_eur,
+                                tariff_type=current_tariff_type,
                             )
                             if not success:
                                 raise Exception("Excel-Vorlage konnte nicht gefuellt werden")

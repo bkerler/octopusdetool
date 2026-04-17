@@ -13,6 +13,7 @@ import os
 import platform
 import shutil
 import sys
+from copy import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -30,6 +31,7 @@ except ZoneInfoNotFoundError:
     APP_TIMEZONE = datetime.now().astimezone().tzinfo or timezone(timedelta(hours=1))
 
 EXCEL_TEMPLATE_FILENAME = "smartmeter_daten.xlsx"
+HEAT_EXCEL_TEMPLATE_FILENAME = "smartmeter_heat_daten.xlsx"
 DEFAULT_TARIFF_GO_CT = 15.92
 DEFAULT_TARIFF_STANDARD_CT = 29.13
 DEFAULT_TARIFF_HEAT_LOW_CT = 21.50
@@ -78,9 +80,14 @@ def get_default_tariff_settings_for_type(tariff_type: str) -> TariffSettings:
     )
 
 
-def get_bundled_excel_template_path() -> Path:
+def get_bundled_excel_template_path(tariff_type: str = TARIFF_INTELLIGENT_GO) -> Path:
     """Get the bundled blank Excel template path."""
-    return Path(__file__).parent / EXCEL_TEMPLATE_FILENAME
+    filename = (
+        HEAT_EXCEL_TEMPLATE_FILENAME
+        if tariff_type == TARIFF_INTELLIGENT_HEAT
+        else EXCEL_TEMPLATE_FILENAME
+    )
+    return Path(__file__).parent / filename
 
 
 def get_documents_folder() -> Path:
@@ -109,20 +116,213 @@ def get_smartmeter_data_folder() -> Path:
     return get_documents_folder() / "smartmeter_data"
 
 
-def ensure_excel_template():
-    """Copy Excel template to smartmeter_data folder if it doesn't exist."""
+def _copy_cell_style(source_cell, target_cell) -> None:
+    target_cell._style = copy(source_cell._style)
+    target_cell.font = copy(source_cell.font)
+    target_cell.fill = copy(source_cell.fill)
+    target_cell.border = copy(source_cell.border)
+    target_cell.alignment = copy(source_cell.alignment)
+    target_cell.protection = copy(source_cell.protection)
+    target_cell.number_format = source_cell.number_format
+
+
+def detect_excel_template_type(workbook_path: Path | str) -> str:
+    """Detect the tariff model from the number of tariff zones listed in Einstellungen."""
+    try:
+        import openpyxl
+    except ImportError:
+        return TARIFF_INTELLIGENT_GO
+
+    try:
+        workbook = openpyxl.load_workbook(workbook_path, data_only=True, read_only=True)
+        ws = workbook["Einstellungen"]
+        tariff_zone_count = 0
+        for row in range(3, 10):
+            label = ws[f"A{row}"].value
+            if isinstance(label, str) and label.startswith("Tarif "):
+                tariff_zone_count += 1
+                continue
+            if label == "Startdatum":
+                break
+        workbook.close()
+        return TARIFF_INTELLIGENT_HEAT if tariff_zone_count >= 3 else TARIFF_INTELLIGENT_GO
+    except Exception:
+        return TARIFF_INTELLIGENT_GO
+
+
+def get_excel_layout(tariff_type: str) -> dict[str, str]:
+    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+        return {
+            "tariff_low": "B3",
+            "tariff_standard": "B4",
+            "tariff_high": "B5",
+            "start_date": "B6",
+            "end_date": "B7",
+            "base_price": "B8",
+            "zone_count": "3",
+        }
+
+    return {
+        "tariff_low": "B3",
+        "tariff_standard": "B4",
+        "tariff_high": "",
+        "start_date": "B5",
+        "end_date": "B6",
+        "base_price": "B7",
+        "zone_count": "2",
+    }
+
+
+def create_heat_excel_template(source_path: Path, target_path: Path) -> Path:
+    """Create a heat-specific workbook copy from the stock template."""
+    import openpyxl
+
+    source_path = Path(source_path)
+    target_path = Path(target_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+
+    workbook = openpyxl.load_workbook(source_path)
+
+    ws_settings = workbook["Einstellungen"]
+    ws_consumption = workbook["Verbrauch"]
+    ws_day = workbook["Tagesübersicht"]
+    ws_week = workbook["Wochenübersicht"]
+    ws_month = workbook["Monatsübersicht"]
+    ws_year = workbook["Jahresübersicht"]
+
+    # Einstellungen sheet: expand from 2 to 3 tariff rows without shifting the whole workbook.
+    heat_settings = {
+        "A3": "Tarif Niedrig 02:00-05:59, 12:00-15:59 (ct/kWh)",
+        "B3": DEFAULT_TARIFF_HEAT_LOW_CT,
+        "A4": "Tarif Standard 06:00-11:59, 16:00-17:59, 21:00-01:59 (ct/kWh)",
+        "B4": DEFAULT_TARIFF_HEAT_STANDARD_CT,
+        "A5": "Tarif Hoch 18:00-20:59 (ct/kWh)",
+        "B5": DEFAULT_TARIFF_HEAT_HIGH_CT,
+        "A6": "Startdatum",
+        "B6": ws_settings["B5"].value,
+        "A7": "Enddatum der Vorlage",
+        "B7": ws_settings["B6"].value,
+        "A8": "Grundpreis pro Monat (€)",
+        "B8": DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR,
+        "A9": "Tipp",
+        "B9": "Wenn sich Tarif oder Grundpreis ändern, nur B3/B4/B5/B8 anpassen.",
+    }
+
+    for target_coord, value in sorted(
+        heat_settings.items(),
+        key=lambda item: int("".join(character for character in item[0] if character.isdigit())),
+        reverse=True,
+    ):
+        if target_coord in {"A5", "B5"}:
+            style_source = ws_settings["A4"] if target_coord.startswith("A") else ws_settings["B4"]
+        elif target_coord in {"A6", "B6"}:
+            style_source = ws_settings["A5"] if target_coord.startswith("A") else ws_settings["B5"]
+        elif target_coord in {"A7", "B7"}:
+            style_source = ws_settings["A6"] if target_coord.startswith("A") else ws_settings["B6"]
+        elif target_coord in {"A8", "B8"}:
+            style_source = ws_settings["A7"] if target_coord.startswith("A") else ws_settings["B7"]
+        elif target_coord in {"A9", "B9"}:
+            style_source = ws_settings["A8"] if target_coord.startswith("A") else ws_settings["B8"]
+        else:
+            style_source = ws_settings[target_coord]
+        _copy_cell_style(style_source, ws_settings[target_coord])
+        ws_settings[target_coord].value = value
+
+    # Verbrauch formulas switch to the heat zones and the shifted start date / base price cells.
+    max_consumption_row = ws_consumption.max_row
+    for row in range(9, max_consumption_row + 1):
+        hour_ref = f"B{row}"
+        ws_consumption[f"A{row}"] = f"=Einstellungen!$B$6+INT((ROW()-9)/24)"
+        ws_consumption[f"D{row}"] = (
+            f'=IF(OR(AND({hour_ref}>=2,{hour_ref}<6),AND({hour_ref}>=12,{hour_ref}<16)),'
+            'Einstellungen!$B$3,'
+            f'IF(AND({hour_ref}>=18,{hour_ref}<21),Einstellungen!$B$5,Einstellungen!$B$4))'
+        )
+        ws_consumption[f"F{row}"] = (
+            f'=IF(OR(AND({hour_ref}>=2,{hour_ref}<6),AND({hour_ref}>=12,{hour_ref}<16)),"Niedrig",'
+            f'IF(AND({hour_ref}>=18,{hour_ref}<21),"Hoch","Standard"))'
+        )
+
+    # Overview sheets: keep existing totals and costs, add Hoch as an extra column.
+    ws_day["D4"] = "davon Niedrig (kWh)"
+    ws_day["E4"] = "davon Standard (kWh)"
+    ws_day["I4"] = "davon Hoch (kWh)"
+    for row in range(5, ws_day.max_row + 1):
+        ws_day[f"D{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&A{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&B{row},Verbrauch!$F$9:$F$18896,"Niedrig")'
+        )
+        ws_day[f"E{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&A{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&B{row},Verbrauch!$F$9:$F$18896,"Standard")'
+        )
+        ws_day[f"I{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&A{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&B{row},Verbrauch!$F$9:$F$18896,"Hoch")'
+        )
+
+    ws_week["F4"] = "davon Niedrig (kWh)"
+    ws_week["G4"] = "davon Standard (kWh)"
+    ws_week["J4"] = "davon Hoch (kWh)"
+    for row in range(5, ws_week.max_row + 1):
+        ws_week[f"F{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&A{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&B{row},Verbrauch!$F$9:$F$18896,"Niedrig")'
+        )
+        ws_week[f"G{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&A{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&B{row},Verbrauch!$F$9:$F$18896,"Standard")'
+        )
+        ws_week[f"J{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&A{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&B{row},Verbrauch!$F$9:$F$18896,"Hoch")'
+        )
+
+    ws_month["F1"] = (
+        'Diese Übersicht aktualisiert sich automatisch, sobald du in der Tabelle "Verbrauch" '
+        'deine stündlichen kWh einträgst. Monatskosten enthalten jetzt den Grundpreis von Einstellungen!B8.'
+    )
+
+    ws_year["E4"] = "davon Niedrig (kWh)"
+    ws_year["F4"] = "davon Standard (kWh)"
+    ws_year["J4"] = "davon Hoch (kWh)"
+    for row in range(5, ws_year.max_row + 1):
+        ws_year[f"E{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&B{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&C{row},Verbrauch!$F$9:$F$18896,"Niedrig")'
+        )
+        ws_year[f"F{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&B{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&C{row},Verbrauch!$F$9:$F$18896,"Standard")'
+        )
+        ws_year[f"J{row}"] = (
+            f'=SUMIFS(Verbrauch!$C$9:$C$18896,Verbrauch!$A$9:$A$18896,">="&B{row},'
+            f'Verbrauch!$A$9:$A$18896,"<"&C{row},Verbrauch!$F$9:$F$18896,"Hoch")'
+        )
+
+    workbook.save(target_path)
+    workbook.close()
+    return target_path
+
+
+def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
+    """Copy the requested Excel template to smartmeter_data if it doesn't exist."""
     smartmeter_folder = get_smartmeter_data_folder()
     smartmeter_folder.mkdir(parents=True, exist_ok=True)
-    
-    # Source: template in octopusdetool package directory
-    source = get_bundled_excel_template_path()
-    # Target: Documents/smartmeter_data/
-    target = smartmeter_folder / EXCEL_TEMPLATE_FILENAME
-    
-    if source.exists() and not target.exists():
-        shutil.copy2(source, target)
-        print(f"Excel-Vorlage kopiert nach: {target}")
-    
+
+    source = get_bundled_excel_template_path(tariff_type)
+    target = smartmeter_folder / source.name
+
+    if not target.exists():
+        if source.exists():
+            shutil.copy2(source, target)
+            print(f"Excel-Vorlage kopiert nach: {target}")
+        elif tariff_type == TARIFF_INTELLIGENT_HEAT:
+            stock_source = get_bundled_excel_template_path(TARIFF_INTELLIGENT_GO)
+            if stock_source.exists():
+                create_heat_excel_template(stock_source, target)
+                print(f"Heat-Excel-Vorlage erzeugt nach: {target}")
+
     return target if target.exists() else source
 
 
@@ -131,14 +331,20 @@ def get_default_output_path() -> Path:
     return get_smartmeter_data_folder() / "consumption.csv"
 
 
-def get_default_excel_path() -> Path:
+def get_default_excel_path(tariff_type: str = TARIFF_INTELLIGENT_GO) -> Path:
     """Get the default Excel output path shown in the UI/CLI."""
-    return get_smartmeter_data_folder() / EXCEL_TEMPLATE_FILENAME
+    filename = (
+        HEAT_EXCEL_TEMPLATE_FILENAME
+        if tariff_type == TARIFF_INTELLIGENT_HEAT
+        else EXCEL_TEMPLATE_FILENAME
+    )
+    return get_smartmeter_data_folder() / filename
 
 
-def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, float]:
+def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, float | str]:
     """Read tariff defaults from the Excel template, falling back to built-in values."""
     defaults = {
+        "tariff_type": TARIFF_INTELLIGENT_GO,
         "tariff_go_ct": DEFAULT_TARIFF_GO_CT,
         "tariff_standard_ct": DEFAULT_TARIFF_STANDARD_CT,
         "tariff_heat_low_ct": DEFAULT_TARIFF_HEAT_LOW_CT,
@@ -158,21 +364,28 @@ def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, f
         return defaults
 
     try:
+        detected_type = detect_excel_template_type(workbook_path)
+        defaults["tariff_type"] = detected_type
+        if detected_type == TARIFF_INTELLIGENT_HEAT:
+            defaults["monthly_base_price_eur"] = DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR
+        layout = get_excel_layout(detected_type)
         wb = openpyxl.load_workbook(workbook_path, data_only=True, read_only=True)
         ws = wb["Einstellungen"]
         values = {
-            "tariff_go_ct": ws["B3"].value,
-            "tariff_standard_ct": ws["B4"].value,
-            "tariff_heat_low_ct": None,
-            "tariff_heat_standard_ct": None,
-            "tariff_heat_high_ct": None,
-            "monthly_base_price_eur": ws["B7"].value,
+            "tariff_go_ct": ws[layout["tariff_low"]].value if layout["tariff_low"] else None,
+            "tariff_standard_ct": ws[layout["tariff_standard"]].value if layout["tariff_standard"] else None,
+            "tariff_heat_low_ct": ws[layout["tariff_low"]].value if detected_type == TARIFF_INTELLIGENT_HEAT else None,
+            "tariff_heat_standard_ct": ws[layout["tariff_standard"]].value if detected_type == TARIFF_INTELLIGENT_HEAT else None,
+            "tariff_heat_high_ct": ws[layout["tariff_high"]].value if layout["tariff_high"] else None,
+            "monthly_base_price_eur": ws[layout["base_price"]].value,
         }
         wb.close()
     except Exception:
         return defaults
 
     for key, default in defaults.items():
+        if key == "tariff_type":
+            continue
         try:
             if values[key] is not None:
                 defaults[key] = float(values[key])
@@ -754,7 +967,9 @@ def fill_excel_template(
     output_path: str,
     tariff_go_ct: float = DEFAULT_TARIFF_GO_CT,
     tariff_standard_ct: float = DEFAULT_TARIFF_STANDARD_CT,
+    tariff_high_ct: float = 0.0,
     monthly_base_price_eur: float = DEFAULT_MONTHLY_BASE_PRICE_EUR,
+    tariff_type: str | None = None,
 ):
     """
     Fill a German electricity tariff Excel template with consumption data.
@@ -777,20 +992,36 @@ def fill_excel_template(
         return False
     
     try:
+        requested_tariff_type = tariff_type or TARIFF_INTELLIGENT_GO
         template_path_obj = Path(template_path)
         output_path_obj = Path(output_path)
-        bundled_template = get_bundled_excel_template_path()
+        workbook_tariff_type = requested_tariff_type
+        bundled_template = get_bundled_excel_template_path(requested_tariff_type)
 
         output_path_obj.parent.mkdir(parents=True, exist_ok=True)
 
-        if not template_path_obj.exists() and bundled_template.exists():
+        if template_path_obj.exists():
+            workbook_tariff_type = detect_excel_template_type(template_path_obj)
+            if tariff_type and workbook_tariff_type != tariff_type:
+                print(
+                    "Fehler: Die ausgewaehlte Excel-Datei verwendet ein anderes Tarifzonenmodell "
+                    f"({workbook_tariff_type}) als der aktuelle Tarif ({tariff_type})."
+                )
+                return False
+        elif bundled_template.exists():
             template_path_obj.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(bundled_template, template_path_obj)
             print(f"Excel-Vorlage aus dem Paket kopiert nach: {template_path_obj}")
+        elif requested_tariff_type == TARIFF_INTELLIGENT_HEAT:
+            stock_template = get_bundled_excel_template_path(TARIFF_INTELLIGENT_GO)
+            if stock_template.exists():
+                create_heat_excel_template(stock_template, template_path_obj)
+                print(f"Heat-Excel-Vorlage erzeugt nach: {template_path_obj}")
         elif not template_path_obj.exists():
             print(f"Fehler: Excel-Vorlage nicht gefunden: {template_path_obj}")
             return False
 
+        layout = get_excel_layout(workbook_tariff_type)
         template_path = str(template_path_obj)
         output_path = str(output_path_obj)
 
@@ -831,22 +1062,26 @@ def fill_excel_template(
         last_date = csv_dates[-1]
         print(f"CSV-Datumsbereich: {first_date} bis {last_date}")
         
-        # Update Einstellungen sheet: B3/B4/B7 = tariffs, B5 = start date, B6 = end date
+        # Update Einstellungen sheet based on the detected template layout.
         print(f"\nUpdating Einstellungen sheet:")
-        ws_einstellungen['B3'].value = float(tariff_go_ct)
-        ws_einstellungen['B4'].value = float(tariff_standard_ct)
-        ws_einstellungen['B7'].value = float(monthly_base_price_eur)
+        ws_einstellungen[layout["tariff_low"]].value = float(tariff_go_ct)
+        ws_einstellungen[layout["tariff_standard"]].value = float(tariff_standard_ct)
+        if workbook_tariff_type == TARIFF_INTELLIGENT_HEAT and layout["tariff_high"]:
+            ws_einstellungen[layout["tariff_high"]].value = float(tariff_high_ct)
+        ws_einstellungen[layout["base_price"]].value = float(monthly_base_price_eur)
         first_date_dt = datetime.strptime(first_date, "%Y-%m-%d")
         last_date_dt = datetime.strptime(last_date, "%Y-%m-%d")
 
         # Format as German date (DD.MM.YYYY) for the Excel
-        ws_einstellungen['B5'].value = first_date_dt
-        ws_einstellungen['B6'].value = last_date_dt
-        print(f"  B3 (Tarif Go): {tariff_go_ct}")
-        print(f"  B4 (Tarif Standard): {tariff_standard_ct}")
-        print(f"  B5 (Start): {first_date}")
-        print(f"  B6 (Ende): {last_date}")
-        print(f"  B7 (Grundpreis): {monthly_base_price_eur}")
+        ws_einstellungen[layout["start_date"]].value = first_date_dt
+        ws_einstellungen[layout["end_date"]].value = last_date_dt
+        print(f"  {layout['tariff_low']} (Tarif Niedrig/Go): {tariff_go_ct}")
+        print(f"  {layout['tariff_standard']} (Tarif Standard): {tariff_standard_ct}")
+        if workbook_tariff_type == TARIFF_INTELLIGENT_HEAT and layout["tariff_high"]:
+            print(f"  {layout['tariff_high']} (Tarif Hoch): {tariff_high_ct}")
+        print(f"  {layout['start_date']} (Start): {first_date}")
+        print(f"  {layout['end_date']} (Ende): {last_date}")
+        print(f"  {layout['base_price']} (Grundpreis): {monthly_base_price_eur}")
         
         # Template structure for Verbrauch sheet
         DATA_START_ROW = 9
@@ -855,7 +1090,7 @@ def fill_excel_template(
         CONSUMPTION_COL = 3  # Column C
         
         # Fill consumption values in Verbrauch sheet
-        # The formulas in A and B will auto-calculate based on B5
+        # The formulas in A and B will auto-calculate based on the template start date cell.
         # We only need to fill column C where we have matching data and cell is empty
         print(f"\nFilling Verbrauch sheet (column C from row {DATA_START_ROW})...")
         
@@ -870,13 +1105,12 @@ def fill_excel_template(
         for row in range(DATA_START_ROW, min(max_row + 1, ws_verbrauch.max_row + 1)):
             rows_checked += 1
             
-            # Get date from column A (calculated from formula based on B5)
+            # Get date from column A (calculated from the template start date cell)
             date_cell = ws_verbrauch.cell(row=row, column=DATE_COL)
             if isinstance(date_cell, MergedCell):
                 continue
             
-            # For formula cells, we need to calculate the value ourselves
-            # Formula: =Einstellungen!$B$5+INT((ROW()-9)/24)
+            # Mirror the workbook formula logic in Python while filling values.
             days_offset = (row - DATA_START_ROW) // 24
             date_parsed = first_date_dt + timedelta(days=days_offset)
             
