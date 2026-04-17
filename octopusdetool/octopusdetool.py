@@ -18,7 +18,7 @@ import sys
 import uuid
 from copy import copy
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfoNotFoundError
