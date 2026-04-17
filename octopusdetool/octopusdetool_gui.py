@@ -376,6 +376,7 @@ class OctopusSmartMeterGUI:
         self.current_tariff_code = ""
         self.current_tariff_valid_from = ""
         self.current_tariff_valid_to = ""
+        self._has_saved_base_price = False
 
         self.template_path = ensure_excel_template()
         self.default_tariff_settings = load_excel_tariff_settings(self.template_path)
@@ -898,6 +899,23 @@ QListView::item:selected {
         with open(CONFIG_FILE, "w", encoding="utf-8") as config_file:
             json.dump(config_to_save, config_file, indent=2)
 
+    def _persist_requested_tariff_code(self, code: str) -> None:
+        get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
+
+        if CONFIG_FILE.exists():
+            try:
+                config, _migrated = self._read_config_with_migration()
+            except Exception:
+                config = {}
+        else:
+            config = {}
+
+        if config.get(LAST_TARIFF_CODE_CONFIG_KEY) == code:
+            return
+
+        config[LAST_TARIFF_CODE_CONFIG_KEY] = code
+        self._write_config(config)
+
     def _toggle_password_visibility(self, checked: bool) -> None:
         self.password_line_edit.setEchoMode(
             QLineEdit.EchoMode.Normal if checked else QLineEdit.EchoMode.Password
@@ -1029,19 +1047,19 @@ QListView::item:selected {
     def _on_tariff_type_changed(self, tariff_type: str) -> None:
         defaults = get_default_tariff_settings_for_type(tariff_type)
         try:
-            base_price = self._parse_decimal_input(self.base_price_line_edit.text())
+            base_price_eur = self._parse_decimal_input(self.base_price_line_edit.text())
         except ValueError:
-            base_price = self.default_tariff_settings.get(
-                "monthly_base_price_eur",
-                DEFAULT_MONTHLY_BASE_PRICE_EUR,
-            )
+            base_price_eur = defaults.monthly_base_price_eur
+
+        if not self._has_saved_base_price and not self.base_price_line_edit.text().strip():
+            base_price_eur = defaults.monthly_base_price_eur
 
         self._set_tariff_inputs(
             tariff_type,
             defaults.low_ct,
             defaults.standard_ct,
             defaults.high_ct,
-            base_price,
+            base_price_eur,
         )
         self._refresh_analysis_view()
 
@@ -1161,6 +1179,7 @@ QListView::item:selected {
         self.current_tariff_valid_from = agreement.valid_from
         self.current_tariff_valid_to = agreement.valid_to or ""
         self.tariff_code_line_edit.setText(agreement.code)
+        self._persist_requested_tariff_code(agreement.code)
 
         detected_type = self._resolve_tariff_type_from_code(agreement.code)
         if detected_type is None:
@@ -1175,10 +1194,7 @@ QListView::item:selected {
         try:
             base_price = self._parse_decimal_input(self.base_price_line_edit.text())
         except ValueError:
-            base_price = self.default_tariff_settings.get(
-                "monthly_base_price_eur",
-                DEFAULT_MONTHLY_BASE_PRICE_EUR,
-            )
+            base_price = defaults.monthly_base_price_eur
 
         self._set_tariff_inputs(
             detected_type,
@@ -1570,6 +1586,7 @@ QListView::item:selected {
         get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
 
         if not CONFIG_FILE.exists():
+            self._has_saved_base_price = False
             self._refresh_analysis_view()
             return
 
@@ -1604,6 +1621,7 @@ QListView::item:selected {
 
             self._set_date_from_string(self.from_date_edit, config.get("from_date", "01.01.2024"), QDate(2024, 1, 1))
             self.to_date_edit.setDate(QDate.currentDate())
+            self._has_saved_base_price = "monthly_base_price_eur" in config
             saved_tariff_type = config.get(TARIFF_TYPE_CONFIG_KEY, TARIFF_INTELLIGENT_GO)
             self._set_tariff_inputs(
                 saved_tariff_type,
@@ -1648,6 +1666,7 @@ QListView::item:selected {
             else:
                 self._set_status("Konfiguration aus config.json geladen")
         except Exception as exc:
+            self._has_saved_base_price = False
             self._set_status(f"Fehler beim Laden der Konfiguration: {exc}")
 
     def check_existing_data(self) -> None:
@@ -1745,6 +1764,7 @@ QListView::item:selected {
 
         try:
             self._write_config(config)
+            self._has_saved_base_price = True
             self._set_status("Zugangsdaten speichern")
         except Exception as exc:
             self._set_status(f"Fehler beim Speichern der Zugangsdaten: {exc}")

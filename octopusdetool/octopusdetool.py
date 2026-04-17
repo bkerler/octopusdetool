@@ -36,6 +36,7 @@ DEFAULT_TARIFF_HEAT_LOW_CT = 21.50
 DEFAULT_TARIFF_HEAT_STANDARD_CT = 28.51
 DEFAULT_TARIFF_HEAT_HIGH_CT = 33.51
 DEFAULT_MONTHLY_BASE_PRICE_EUR = 15.94
+DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR = 14.50
 TARIFF_INTELLIGENT_GO = "Intelligent Go"
 TARIFF_INTELLIGENT_HEAT = "Intelligent Heat"
 TARIFF_INTELLIGENT_GO_LIGHT_CODE = "DEU-ELECTRICITY-IO-GO-LIGHT-24"
@@ -55,6 +56,7 @@ class TariffSettings:
     low_ct: float
     standard_ct: float
     high_ct: float
+    monthly_base_price_eur: float
 
 
 def get_default_tariff_settings_for_type(tariff_type: str) -> TariffSettings:
@@ -64,6 +66,7 @@ def get_default_tariff_settings_for_type(tariff_type: str) -> TariffSettings:
             low_ct=DEFAULT_TARIFF_HEAT_LOW_CT,
             standard_ct=DEFAULT_TARIFF_HEAT_STANDARD_CT,
             high_ct=DEFAULT_TARIFF_HEAT_HIGH_CT,
+            monthly_base_price_eur=DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR,
         )
 
     return TariffSettings(
@@ -71,6 +74,7 @@ def get_default_tariff_settings_for_type(tariff_type: str) -> TariffSettings:
         low_ct=DEFAULT_TARIFF_GO_CT,
         standard_ct=DEFAULT_TARIFF_STANDARD_CT,
         high_ct=0.0,
+        monthly_base_price_eur=DEFAULT_MONTHLY_BASE_PRICE_EUR,
     )
 
 
