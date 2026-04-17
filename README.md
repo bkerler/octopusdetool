@@ -6,21 +6,6 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 
 ## GUI-Version
 
-### Funktionen
-
-- **Eingabefelder** für E-Mail und Passwort
-- **Passwortanzeige umschaltbar** - Passwort ist standardmäßig maskiert; `Show password` blendet es ein
-- **Ausgabeformatauswahl**: Excel (Standard), CSV, JSON oder YAML
-- **Excel-Dateiauswahl** mit Speichern-unter-Dialog für neue oder bestehende `.xlsx`-Dateien
-- **Gezielter Excel-Speicherort** - Die Excel-Datei wird immer genau unter dem im Eingabefeld angegebenen Pfad gespeichert
-- **Datumsbereichsauswahl** mit Kalender-Buttons
-- **Fortschrittsanzeige** - Zeigt "Empfange Daten... X Einträge (Seite Y)"
-- **Konfigurationsspeicherung** - Speichert E-Mail/Passwort verschlüsselt in `config.json` (AES-256-GCM, Base64)
-- **Debug-Ausgabe** - Wenn aktiviert, wird der vollständige GUI-Debug-Log nach `~/Documents/smartmeter_data/log.txt` geschrieben
-- **Automatisches Laden** - Lädt gespeicherte Konfiguration beim Start
-- **Automatische Migration** - Bereits vorhandene Klartext-Zugangsdaten in `config.json` werden beim Laden automatisch verschlüsselt
-- **Automatische Excel-Vorlage** - Existiert die angegebene Excel-Datei noch nicht, wird die mitgelieferte Blanko-Vorlage unter genau diesem Dateinamen erstellt
-
 ### Screenshots
 <img width="1750" height="1445" alt="image" src="https://github.com/user-attachments/assets/8b62973e-7b0b-40e0-8373-6dba8df87129" />
 <img width="1744" height="1442" alt="image" src="https://github.com/user-attachments/assets/38e0a22b-09e2-4d90-82bd-0d739248b25a" />
