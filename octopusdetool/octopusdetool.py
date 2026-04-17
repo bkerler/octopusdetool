@@ -189,6 +189,13 @@ def get_smartmeter_data_folder() -> Path:
     return _get_preferred_directory_path(get_documents_folder() / "smartmeter_data")
 
 
+def ensure_smartmeter_data_folder() -> Path:
+    """Create and return the smartmeter data directory used by the app."""
+    folder = get_smartmeter_data_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
 def _get_preferred_directory_path(path: Path) -> Path:
     """Return a usable directory path, even if the preferred path is a file."""
     if not path.exists() or path.is_dir():
@@ -398,8 +405,7 @@ def create_heat_excel_template(source_path: Path, target_path: Path) -> Path:
 
 def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
     """Copy the requested Excel template to smartmeter_data if it doesn't exist."""
-    smartmeter_folder = get_smartmeter_data_folder()
-    smartmeter_folder.mkdir(parents=True, exist_ok=True)
+    smartmeter_folder = ensure_smartmeter_data_folder()
 
     source = get_bundled_excel_template_path(tariff_type)
     target = smartmeter_folder / source.name
@@ -1483,7 +1489,8 @@ def main():
             print("  Keine Konten gefunden.")
         sys.exit(0)
     
-    # Ensure Excel template exists in Documents folder
+    # Ensure the app data directory and Excel template exist before continuing.
+    ensure_smartmeter_data_folder()
     ensure_excel_template()
     
     # Parse dates

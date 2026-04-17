@@ -70,6 +70,7 @@ from octopusdetool.octopusdetool import (
     classify_tariff_zone,
     detect_excel_template_type,
     ensure_excel_template,
+    ensure_smartmeter_data_folder,
     fill_excel_template,
     format_datetime,
     get_default_excel_path,
@@ -2138,6 +2139,7 @@ def main() -> None:
     if platform.system() == "Darwin":
         app.setStyle(QStyleFactory.create("Fusion"))
     app.setApplicationDisplayName("OctopusDETool")
+    ensure_smartmeter_data_folder()
     gui = OctopusSmartMeterGUI(app)
     gui.show()
     app.exec()
