@@ -341,6 +341,33 @@ class CurrencyToggleSwitch(QCheckBox):
         painter.end()
 
 
+class SelectionComboBox(QComboBox):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        text_color = QColor("#f4eeff") if self.isEnabled() else QColor("#a498cb")
+        painter.setPen(text_color)
+
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSizeF(max(font.pointSizeF(), 11.0))
+        painter.setFont(font)
+
+        arrow_rect = self.rect().adjusted(self.width() - 24, 0, -10, 1)
+        painter.drawText(
+            arrow_rect,
+            Qt.AlignmentFlag.AlignCenter,
+            "v",
+        )
+        painter.end()
+
+
 class ViewCalendarPopup(QFrame):
     def __init__(self, parent: QWidget):
         super().__init__(parent, Qt.WindowType.Popup)
@@ -367,6 +394,7 @@ class OctopusSmartMeterGUI:
         self._clear_line_edit_actions: list = []
         self._replace_line_edit_clear_buttons()
         self._replace_data_tab_checkboxes()
+        self._replace_selection_combos()
         self._replace_currency_toggle()
         self._setup_analysis_widgets()
         self._setup_view_calendar_popup()
@@ -528,6 +556,39 @@ class OctopusSmartMeterGUI:
             placeholder.deleteLater()
             setattr(self, attribute_name, replacement)
 
+    def _replace_selection_combos(self) -> None:
+        for attribute_name in (
+            "output_format_combo",
+            "tariff_type_combo",
+            "view_mode_combo",
+        ):
+            placeholder = getattr(self, attribute_name)
+            parent = placeholder.parentWidget()
+            layout = parent.layout() if parent is not None else None
+            if layout is None:
+                continue
+
+            replacement = SelectionComboBox(parent)
+            replacement.setObjectName(placeholder.objectName())
+            replacement.setToolTip(placeholder.toolTip())
+            replacement.setStatusTip(placeholder.statusTip())
+            replacement.setWhatsThis(placeholder.whatsThis())
+            replacement.setEnabled(placeholder.isEnabled())
+            replacement.setSizePolicy(placeholder.sizePolicy())
+            replacement.setMinimumSize(placeholder.minimumSize())
+            replacement.setMaximumSize(placeholder.maximumSize())
+            replacement.setEditable(False)
+            replacement.setInsertPolicy(placeholder.insertPolicy())
+            for index in range(placeholder.count()):
+                replacement.addItem(placeholder.itemIcon(index), placeholder.itemText(index), placeholder.itemData(index))
+            replacement.setCurrentIndex(placeholder.currentIndex())
+
+            layout.replaceWidget(placeholder, replacement)
+            placeholder.hide()
+            placeholder.setParent(None)
+            placeholder.deleteLater()
+            setattr(self, attribute_name, replacement)
+
     def _setup_analysis_widgets(self) -> None:
         chart_layout = self.chart_container.layout()
         if chart_layout is None:
@@ -558,23 +619,24 @@ class OctopusSmartMeterGUI:
     def _apply_popup_styling(self) -> None:
         combo_stylesheet = """
 QComboBox {
-    background-color: #240748;
+    background-color: #2e1160;
     color: #f4eeff;
     border: 1px solid #6f4df6;
-    border-radius: 8px;
-    padding: 6px 12px;
-    selection-background-color: #6f4df6;
+    border-radius: 10px;
+    padding: 8px 34px 8px 10px;
+    selection-background-color: #2e1160;
     selection-color: #ffffff;
 }
 
 QComboBox::drop-down {
     border: none;
-    width: 28px;
+    width: 30px;
     background: transparent;
 }
 
 QComboBox QAbstractItemView {
-    selection-background-color: #6f4df6;
+    background-color: #240748;
+    selection-background-color: #240748;
     selection-color: #ffffff;
 }
 """
@@ -597,7 +659,7 @@ QListView::item {
 }
 
 QListView::item:selected {
-    background-color: #6f4df6;
+    background-color: #240748;
     color: #ffffff;
 }
 """
