@@ -21,8 +21,11 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 - **Automatische Migration** - Bereits vorhandene Klartext-Zugangsdaten in `config.json` werden beim Laden automatisch verschlüsselt
 - **Automatische Excel-Vorlage** - Existiert die angegebene Excel-Datei noch nicht, wird die mitgelieferte Blanko-Vorlage unter genau diesem Dateinamen erstellt
 
-### Screenshot
-<img width="1156" height="1159" alt="image" src="https://github.com/user-attachments/assets/25c95508-d72d-4598-ab2a-b6fd9a7505ef" />
+### Screenshots
+<img width="1750" height="1445" alt="image" src="https://github.com/user-attachments/assets/8b62973e-7b0b-40e0-8373-6dba8df87129" />
+<img width="1744" height="1442" alt="image" src="https://github.com/user-attachments/assets/38e0a22b-09e2-4d90-82bd-0d739248b25a" />
+<img width="1737" height="1441" alt="image" src="https://github.com/user-attachments/assets/b5ef988c-c02a-4577-bb14-8a3f354c7d47" />
+<img width="1737" height="1440" alt="image" src="https://github.com/user-attachments/assets/1280178e-f33c-4044-b4cf-797a516406c3" />
 
 ## Funktionen
 - 📊 **Stündliche Verbrauchsdaten** - Import und Export
@@ -225,6 +228,7 @@ Das Tool füllt die deutsche Stromtarif-Vorlage:
 
 - **Deutsche API Basis-URL:** `https://api.oeg-kraken.energy/v1/`
 - **GraphQL URL:** `https://api.oeg-kraken.energy/v1/graphql/`
+- **GraphQL Dokumentation:** `https://docs.oeg-kraken.energy/`
 - **Authentifizierung:** E-Mail/Passwort via GraphQL `obtainKrakenToken`
 - **Token-Gültigkeit:** 60 Minuten (automatisch aktualisiert)
 - **Aktualisierungstoken:** 7 Tage gültig
