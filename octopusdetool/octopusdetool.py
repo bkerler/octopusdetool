@@ -8,11 +8,13 @@ and outputs to CSV format. Can also fill German electricity tariff Excel templat
 
 import argparse
 import csv
+import ctypes
 import json
 import os
 import platform
 import shutil
 import sys
+import uuid
 from copy import copy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -43,6 +45,26 @@ TARIFF_INTELLIGENT_GO = "Intelligent Go"
 TARIFF_INTELLIGENT_HEAT = "Intelligent Heat"
 TARIFF_INTELLIGENT_GO_LIGHT_CODE = "DEU-ELECTRICITY-IO-GO-LIGHT-24"
 TARIFF_INTELLIGENT_GO_CODE = "DEU-ELECTRICITY-IO-GO-24"
+
+
+class _WindowsGuid(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+    @classmethod
+    def from_string(cls, value: str) -> "_WindowsGuid":
+        parsed = uuid.UUID(value.strip("{}"))
+        data4 = (ctypes.c_ubyte * 8)(*parsed.bytes[8:])
+        return cls(
+            parsed.time_low,
+            parsed.time_mid,
+            parsed.time_hi_version,
+            data4,
+        )
 
 
 @dataclass(slots=True)
@@ -93,10 +115,11 @@ def get_bundled_excel_template_path(tariff_type: str = TARIFF_INTELLIGENT_GO) ->
 def get_documents_folder() -> Path:
     """Get the user's Documents folder path (cross-platform)."""
     system = platform.system()
-    
+
     if system == "Windows":
-        # Windows: use %USERPROFILE%\Documents
-        docs = Path.home() / "Documents"
+        # Prefer the Windows "Documents" known folder because Path.home()
+        # can point to a stale or virtualized profile in packaged apps.
+        docs = _get_windows_documents_folder()
     elif system == "Darwin":
         # macOS: ~/Documents
         docs = Path.home() / "Documents"
@@ -107,13 +130,81 @@ def get_documents_folder() -> Path:
             docs = Path(xdg_docs)
         else:
             docs = Path.home() / "Documents"
-    
+
     return docs
+
+
+def _get_windows_documents_folder() -> Path:
+    """Resolve the current user's Documents folder on Windows."""
+    known_folder = _get_windows_known_folder(
+        "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}"
+    )
+    if known_folder:
+        return known_folder
+
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        return Path(userprofile) / "Documents"
+
+    homedrive = os.environ.get("HOMEDRIVE")
+    homepath = os.environ.get("HOMEPATH")
+    if homedrive and homepath:
+        return Path(f"{homedrive}{homepath}") / "Documents"
+
+    home = Path.home()
+    if home.name:
+        return home / "Documents"
+
+    # Final fallback keeps the app writable even if Windows profile discovery fails.
+    return Path.cwd() / "Documents"
+
+
+def _get_windows_known_folder(folder_id: str) -> Path | None:
+    """Return a Windows known folder path, or None if it cannot be resolved."""
+    path_ptr = ctypes.c_wchar_p()
+    shell32 = getattr(ctypes.windll, "shell32", None)
+    ole32 = getattr(ctypes.windll, "ole32", None)
+    if shell32 is None or ole32 is None:
+        return None
+
+    try:
+        result = shell32.SHGetKnownFolderPath(
+            ctypes.byref(_WindowsGuid.from_string(folder_id)),
+            0,
+            None,
+            ctypes.byref(path_ptr),
+        )
+        if result != 0 or not path_ptr.value:
+            return None
+        return Path(path_ptr.value)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    finally:
+        if path_ptr:
+            ole32.CoTaskMemFree(path_ptr)
 
 
 def get_smartmeter_data_folder() -> Path:
     """Get the smartmeter_data folder path (in Documents)."""
-    return get_documents_folder() / "smartmeter_data"
+    return _get_preferred_directory_path(get_documents_folder() / "smartmeter_data")
+
+
+def _get_preferred_directory_path(path: Path) -> Path:
+    """Return a usable directory path, even if the preferred path is a file."""
+    if not path.exists() or path.is_dir():
+        return path
+
+    for suffix in ("_dir", "_folder", "_data"):
+        candidate = path.with_name(f"{path.name}{suffix}")
+        if not candidate.exists() or candidate.is_dir():
+            return candidate
+
+    index = 1
+    while True:
+        candidate = path.with_name(f"{path.name}_{index}")
+        if not candidate.exists() or candidate.is_dir():
+            return candidate
+        index += 1
 
 
 def _copy_cell_style(source_cell, target_cell) -> None:
