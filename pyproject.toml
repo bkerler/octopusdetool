@@ -157,6 +157,7 @@ octopusdetool = "octopusdetool.octopusdetool:main"
 include = [
     "octopusdetool/",
     "octopusdetool/*.xlsx",
+    "octopusdetool/octopusdetool_gui.icns",
     "octopusdetool/octopusdetool_gui.svg",
     "octopusdetool/octopusdetool_gui.ico",
     "octopusdetool/octopusdetool_gui-*.png",
@@ -168,6 +169,7 @@ packages = ["octopusdetool"]
 include = [
     "octopusdetool/*.xlsx",
     "octopusdetool/octopusdetool_gui.ui",
+    "octopusdetool/octopusdetool_gui.icns",
     "octopusdetool/octopusdetool_gui.svg",
     "octopusdetool/octopusdetool_gui.ico",
     "octopusdetool/octopusdetool_gui-*.png",
