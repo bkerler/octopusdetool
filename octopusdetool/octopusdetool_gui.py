@@ -62,10 +62,13 @@ from octopusdetool.octopusdetool import (
     DEFAULT_TARIFF_HEAT_STANDARD_CT,
     DEFAULT_TARIFF_STANDARD_CT,
     OctopusGermanyClient,
+    TARIFF_DYNAMIC_CODE,
     TARIFF_INTELLIGENT_GO,
     TARIFF_INTELLIGENT_GO_CODE,
     TARIFF_INTELLIGENT_GO_LIGHT_CODE,
     TARIFF_INTELLIGENT_HEAT,
+    TARIFF_INTELLIGENT_HEAT_CODE,
+    TARIFF_INTELLIGENT_HEAT_LIGHT_CODE,
     TariffAgreement,
     classify_tariff_zone,
     detect_excel_template_type,
@@ -1257,28 +1260,44 @@ QListView::item:selected {
         self.save_config(force=True)
 
     def _resolve_tariff_type_from_code(self, code: str) -> str | None:
-        if code == TARIFF_INTELLIGENT_GO_LIGHT_CODE:
-            return None
         if code == TARIFF_INTELLIGENT_GO_CODE:
             return TARIFF_INTELLIGENT_GO
-        if "HEAT" in code:
+        if code == TARIFF_INTELLIGENT_HEAT_CODE or "HEAT" in code:
             return TARIFF_INTELLIGENT_HEAT
         return None
 
-    def _apply_tariff_agreement(self, agreement: TariffAgreement | None) -> None:
+    def _get_unsupported_tariff_message(self, code: str) -> str | None:
+        if code == TARIFF_DYNAMIC_CODE:
+            return "Octopus Energy Dynamic Tarif isn't yet supported"
+        if code == TARIFF_INTELLIGENT_GO_LIGHT_CODE:
+            return "Octopus Energy Go Light hat keine Smartmeter-Unterstuetzung"
+        if code == TARIFF_INTELLIGENT_HEAT_LIGHT_CODE:
+            return "Octopus Energy Heat Light hat keine Smartmeterunterstuetzung"
+        return None
+
+    def _apply_tariff_agreement(self, agreement: TariffAgreement | None) -> bool:
         if agreement is None:
             self.current_tariff_code = "None"
             self.current_tariff_valid_from = ""
             self.current_tariff_valid_to = ""
             self.tariff_code_line_edit.setText("None")
             self._persist_requested_tariff_code("None")
-            return
+            return True
 
         self.current_tariff_code = agreement.code
         self.current_tariff_valid_from = agreement.valid_from
         self.current_tariff_valid_to = agreement.valid_to or ""
         self.tariff_code_line_edit.setText(agreement.code)
         self._persist_requested_tariff_code(agreement.code)
+
+        unsupported_message = self._get_unsupported_tariff_message(agreement.code)
+        if unsupported_message is not None:
+            QMessageBox.warning(
+                self.window,
+                "Tarif nicht unterstuetzt",
+                unsupported_message,
+            )
+            return False
 
         detected_type = self._resolve_tariff_type_from_code(agreement.code)
         if detected_type is None:
@@ -1287,7 +1306,7 @@ QListView::item:selected {
                 "Tarif nicht unterstuetzt",
                 f"Dieser code wird aktuell noch nicht unterstuetzt: {agreement.code}",
             )
-            return
+            return False
 
         defaults = get_default_tariff_settings_for_type(detected_type)
         try:
@@ -1302,6 +1321,7 @@ QListView::item:selected {
             defaults.high_ct,
             base_price,
         )
+        return True
 
     def on_format_changed(self, _value: str | None = None) -> None:
         previous_format = getattr(self, "last_output_format", "excel")
@@ -2015,7 +2035,9 @@ QListView::item:selected {
                             )
 
                         account_number = accounts[0].get("number")
-                        self._apply_tariff_agreement(client.get_active_tariff_agreement(account_number))
+                        if not self._apply_tariff_agreement(client.get_active_tariff_agreement(account_number)):
+                            self._set_status("Datenabruf wegen nicht unterstuetztem Tarif abgebrochen.", update=True)
+                            return
                         tariff_values = self._get_tariff_values(show_error=False)
                         if tariff_values is None:
                             raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
