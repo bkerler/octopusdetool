@@ -624,6 +624,21 @@ def map_rate_structure_to_tariff_settings(
                 high_ct=high_rate.rate_ct,
                 monthly_base_price_eur=monthly_base_price_eur,
             )
+
+        # Relaxed compatibility for Heat: if the live tariff exposes exactly
+        # three distinct price levels, keep Excel export enabled even when the
+        # provider's time windows do not exactly match the bundled workbook's
+        # fixed labels. We map the lowest/middle/highest rate to the workbook's
+        # low/standard/high price fields.
+        unique_prices = sorted({rate.rate_ct for rate in rates})
+        if len(unique_prices) == 3:
+            return TariffSettings(
+                tariff_type=TARIFF_INTELLIGENT_HEAT,
+                low_ct=unique_prices[0],
+                standard_ct=unique_prices[1],
+                high_ct=unique_prices[2],
+                monthly_base_price_eur=monthly_base_price_eur,
+            )
         return None
 
     if agreement_code == TARIFF_INTELLIGENT_GO_CODE:
