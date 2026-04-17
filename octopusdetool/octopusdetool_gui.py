@@ -723,7 +723,7 @@ QListView::item:selected {
     def show(self) -> None:
         self.window.show()
         self.app.processEvents()
-        self._fit_window_to_content()
+        self._fit_window_to_content(recenter=True)
 
     def _get_debug_log_path(self) -> Path:
         return get_smartmeter_data_folder() / "log.txt"
@@ -741,7 +741,7 @@ QListView::item:selected {
     def _window_height_overhead(self) -> int:
         return self.window.height() - self.scroll_area.viewport().height()
 
-    def _fit_window_to_content(self) -> None:
+    def _fit_window_to_content(self, *, recenter: bool = False) -> None:
         screen = self.window.screen() or self.app.primaryScreen()
         if screen is None:
             return
@@ -783,9 +783,10 @@ QListView::item:selected {
         target_height = min(max(required_height, self.window.minimumHeight()), max_height)
         self.window.resize(target_width, target_height)
 
-        position_x = available.x() + max((available.width() - target_width) // 2, 0)
-        position_y = available.y() + max((available.height() - target_height) // 3, 0)
-        self.window.move(position_x, position_y)
+        if recenter:
+            position_x = available.x() + max((available.width() - target_width) // 2, 0)
+            position_y = available.y() + max((available.height() - target_height) // 3, 0)
+            self.window.move(position_x, position_y)
 
     def _encrypt_config_value(self, value: str) -> str:
         if not value:
