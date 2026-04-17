@@ -1,0 +1,1247 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>OctopusSmartMeterWindow</class>
+ <widget class="QWidget" name="OctopusSmartMeterWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1100</width>
+    <height>860</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>960</width>
+    <height>700</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>Octopus Energy Germany - Smartmeter Datenexport V1.0.8</string>
+  </property>
+  <property name="styleSheet">
+<string notr="true">QWidget {
+    background-color: #16042c;
+    color: #f4eeff;
+    font: 10pt &quot;Segoe UI&quot;;
+}
+
+QToolTip {
+    background-color: #240748;
+    color: #ffffff;
+    border: 1px solid #6f4df6;
+    padding: 6px 8px;
+}
+
+QScrollArea,
+QScrollArea QWidget,
+QWidget#dataTab,
+QWidget#tariffTab,
+QWidget#analysisTab,
+QWidget#scrollAreaWidgetContents {
+    background-color: #16042c;
+    color: #f4eeff;
+}
+
+QWidget#diagramTab,
+QWidget#analysisDataTab {
+    background-color: transparent;
+    color: #f4eeff;
+}
+
+QWidget#unitToggleWidget {
+    background-color: transparent;
+    color: #f4eeff;
+}
+
+QFrame#heroFrame,
+QFrame#statusFrame,
+QGroupBox,
+QFrame#tariffFrame,
+QFrame#analysisControlsFrame,
+QFrame#analysisSummaryFrame,
+QFrame#analysisTableFrame,
+QFrame#chartContainer {
+    background-color: #240748;
+    border: 2px solid #9e86ff;
+    border-radius: 18px;
+}
+
+QTabWidget#mainTabWidget::pane {
+    background-color: #240748;
+    border: 3px solid #a894ff;
+    border-radius: 18px;
+    margin-left: 6px;
+    margin-right: 6px;
+    margin-bottom: 6px;
+    margin-top: 8px;
+}
+
+QTabWidget#mainTabWidget QStackedWidget {
+    background-color: transparent;
+    border: none;
+}
+
+QTabWidget#analysisContentTabs::pane {
+    background-color: transparent;
+    border: none;
+    margin-top: 6px;
+}
+
+QTabWidget#analysisContentTabs QStackedWidget {
+    background-color: #240748;
+    border: 2px solid #8d71ff;
+    border-radius: 18px;
+}
+
+QFrame#heroFrame,
+QFrame#statusFrame {
+    padding: 6px;
+}
+
+QGroupBox {
+    margin-top: 12px;
+    padding: 14px;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+    color: #f4eeff;
+    background-color: #240748;
+    font: 600 10pt &quot;Segoe UI&quot;;
+}
+
+QLabel {
+    color: #f4eeff;
+    background-color: transparent;
+}
+
+QLabel#heroTitleLabel {
+    font: 300 22pt &quot;Ubuntu Sans&quot;;
+    color: #ffffff;
+    background-color: transparent;
+    letter-spacing: 0.5px;
+}
+
+QLabel#heroSubtitleLabel,
+QLabel#outputHintLabel,
+QLabel#statusTitleLabel,
+QLabel#tariffIntroLabel,
+QLabel#viewTotalCaptionLabel {
+    color: #cbbcff;
+}
+
+QLabel#statusValueLabel {
+    color: #84ffd6;
+    font: 600 10pt &quot;Segoe UI&quot;;
+}
+
+QLabel#statusTitleLabel,
+QLabel#statusValueLabel {
+    background-color: #240748;
+}
+
+QLabel#heroSubtitleLabel {
+    background-color: transparent;
+    font: 300 11pt &quot;Ubuntu Sans&quot;;
+}
+
+QLineEdit,
+QComboBox,
+QDateEdit,
+QAbstractSpinBox {
+    background-color: #2e1160;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 8px 10px;
+    color: #f4eeff;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}
+
+QLineEdit:focus,
+QComboBox:focus,
+QDateEdit:focus,
+QAbstractSpinBox:focus {
+    border: 1px solid #b79dff;
+}
+
+QComboBox::drop-down,
+QDateEdit::drop-down {
+    border: none;
+    width: 26px;
+    background: transparent;
+}
+
+QComboBox::down-arrow,
+QDateEdit::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+
+QComboBox QAbstractItemView,
+QDateEdit QAbstractItemView,
+QAbstractItemView {
+    background-color: #240748;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+    outline: 0;
+}
+
+QComboBox QFrame,
+QComboBox QListView,
+QComboBox QListView QWidget {
+    background-color: #240748;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+}
+
+QComboBoxPrivateContainer,
+QComboBoxPrivateContainer QWidget,
+QListView,
+QListView QWidget {
+    background-color: #240748;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+}
+
+QComboBox QListView::item {
+    background-color: #240748;
+    color: #f4eeff;
+    border: none;
+    padding: 10px 16px;
+    margin: 0;
+}
+
+QComboBox QListView::item:selected {
+    background-color: #6f4df6;
+    color: #ffffff;
+}
+
+QListView::item {
+    background-color: #240748;
+    color: #f4eeff;
+    border: none;
+    padding: 10px 16px;
+    margin: 0;
+}
+
+QListView::item:selected {
+    background-color: #6f4df6;
+    color: #ffffff;
+}
+
+QCalendarWidget QWidget {
+    background-color: #240748;
+    color: #f4eeff;
+}
+
+QCalendarWidget QToolButton {
+    background-color: #2e1160;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 6px 10px;
+}
+
+QCalendarWidget QMenu {
+    background-color: #240748;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+}
+
+QCalendarWidget QSpinBox {
+    background-color: #2e1160;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    border-radius: 8px;
+    padding: 4px 8px;
+}
+
+QCalendarWidget QAbstractItemView:enabled {
+    background-color: #240748;
+    color: #f4eeff;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}
+
+QPushButton {
+    background-color: #6f4df6;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 9px 16px;
+    color: #ffffff;
+}
+
+QPushButton:hover {
+    background-color: #8d71ff;
+    border-color: #8d71ff;
+}
+
+QPushButton:pressed {
+    background-color: #5537cf;
+    border-color: #5537cf;
+}
+
+QPushButton#fetchDataButton {
+    background-color: #e98bff;
+    border-color: #e98bff;
+    color: #240748;
+    font: 700 10pt &quot;Segoe UI&quot;;
+    min-height: 20px;
+    padding: 11px 18px;
+}
+
+QPushButton#fetchDataButton:hover {
+    background-color: #f2a6ff;
+    border-color: #f2a6ff;
+}
+
+QPushButton#viewCalendarButton {
+    min-width: 40px;
+    padding: 8px 10px;
+}
+
+QProgressBar {
+    background-color: #2e1160;
+    border: 1px solid #6f4df6;
+    border-radius: 8px;
+    min-height: 14px;
+    text-align: center;
+    color: #f4eeff;
+}
+
+QProgressBar::chunk {
+    background-color: #e98bff;
+    border-radius: 8px;
+}
+
+QTabWidget#mainTabWidget QTabBar::tab,
+QTabWidget#analysisContentTabs QTabBar::tab {
+    background-color: #2e1160;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    border-bottom: none;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    min-width: 120px;
+    padding: 10px 18px;
+    margin-right: 4px;
+}
+
+QTabWidget#mainTabWidget QTabBar::tab:selected,
+QTabWidget#analysisContentTabs QTabBar::tab:selected {
+    background-color: #6f4df6;
+    color: #ffffff;
+    font: 600 10pt &quot;Segoe UI&quot;;
+    margin-bottom: -1px;
+}
+
+QCheckBox {
+    color: #f4eeff;
+    spacing: 8px;
+    background-color: transparent;
+}
+
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    border: 1px solid #6f4df6;
+    background-color: #2e1160;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #6f4df6;
+}
+
+QLabel#viewRangeLabel {
+    font: 700 15pt &quot;Segoe UI&quot;;
+}
+
+QLabel#viewTotalValueLabel {
+    font: 700 24pt &quot;Segoe UI&quot;;
+}
+
+QTableView#analysisTableView {
+    background-color: transparent;
+    alternate-background-color: #31105d;
+    border: none;
+    gridline-color: #5e47a3;
+    color: #f4eeff;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}
+
+QTableView#analysisTableView QHeaderView::section {
+    background-color: #1c0638;
+    color: #f4eeff;
+    border: none;
+    padding: 10px;
+    font: 600 10pt &quot;Segoe UI&quot;;
+}
+</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <property name="leftMargin">
+    <number>0</number>
+   </property>
+   <property name="topMargin">
+    <number>0</number>
+   </property>
+   <property name="rightMargin">
+    <number>0</number>
+   </property>
+   <property name="bottomMargin">
+    <number>0</number>
+   </property>
+   <property name="spacing">
+    <number>0</number>
+   </property>
+   <item>
+    <widget class="QTabWidget" name="mainTabWidget">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <widget class="QWidget" name="dataTab">
+      <attribute name="title">
+       <string>Abruf</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="dataTabLayout">
+       <property name="leftMargin">
+        <number>0</number>
+       </property>
+       <property name="topMargin">
+        <number>0</number>
+       </property>
+       <property name="rightMargin">
+        <number>0</number>
+       </property>
+       <property name="bottomMargin">
+        <number>0</number>
+       </property>
+       <item>
+        <widget class="QScrollArea" name="scrollArea">
+         <property name="frameShape">
+          <enum>QFrame::NoFrame</enum>
+         </property>
+         <property name="widgetResizable">
+          <bool>true</bool>
+         </property>
+         <widget class="QWidget" name="scrollAreaWidgetContents">
+          <property name="geometry">
+           <rect>
+            <x>0</x>
+            <y>0</y>
+            <width>1048</width>
+            <height>760</height>
+           </rect>
+          </property>
+          <layout class="QVBoxLayout" name="contentLayout">
+           <property name="leftMargin">
+            <number>12</number>
+           </property>
+           <property name="topMargin">
+            <number>12</number>
+           </property>
+           <property name="rightMargin">
+            <number>12</number>
+           </property>
+           <property name="bottomMargin">
+            <number>8</number>
+           </property>
+           <property name="spacing">
+            <number>10</number>
+           </property>
+           <item>
+            <widget class="QFrame" name="heroFrame">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="heroLayout">
+              <property name="leftMargin">
+               <number>14</number>
+              </property>
+              <property name="topMargin">
+               <number>14</number>
+              </property>
+              <property name="rightMargin">
+               <number>14</number>
+              </property>
+              <property name="bottomMargin">
+               <number>14</number>
+              </property>
+              <property name="spacing">
+               <number>4</number>
+              </property>
+              <item>
+               <widget class="QLabel" name="heroTitleLabel">
+                <property name="text">
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:700; color:#ffffff;&quot;&gt;Octopus&lt;/span&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:300; color:#ffffff;&quot;&gt; Energy Deutschland Smartmeter Datenexport V1.0.8&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="heroSubtitleLabel">
+                <property name="text">
+                 <string>(c) B.Kerler / S. Stahl 2026</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QGroupBox" name="accountGroupBox">
+             <property name="title">
+              <string>Zugangsdaten</string>
+             </property>
+             <layout class="QGridLayout" name="accountLayout">
+              <property name="horizontalSpacing">
+               <number>12</number>
+              </property>
+              <property name="verticalSpacing">
+               <number>10</number>
+              </property>
+              <item row="0" column="0">
+               <widget class="QLabel" name="emailLabel">
+                <property name="text">
+                 <string>E-Mail:</string>
+                </property>
+               </widget>
+              </item>
+              <item row="0" column="1" colspan="2">
+               <widget class="QLineEdit" name="emailLineEdit">
+                <property name="clearButtonEnabled">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="0">
+               <widget class="QLabel" name="passwordLabel">
+                <property name="text">
+                 <string>Passwort:</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="1">
+               <widget class="QLineEdit" name="passwordLineEdit">
+                <property name="echoMode">
+                 <enum>QLineEdit::Password</enum>
+                </property>
+                <property name="clearButtonEnabled">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="2">
+               <widget class="QCheckBox" name="showPasswordCheckBox">
+                <property name="text">
+                 <string>Passwort anzeigen</string>
+                </property>
+               </widget>
+              </item>
+              <item row="2" column="0" colspan="3">
+               <widget class="QCheckBox" name="saveConfigCheckBox">
+                <property name="text">
+                 <string>Konfiguration in config.json speichern</string>
+                </property>
+                <property name="checked">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="0" colspan="3">
+               <widget class="QCheckBox" name="debugCheckBox">
+                <property name="text">
+                 <string>Debug-Ausgabe in Dokumente/smartmeter_data/log.txt speichern</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QGroupBox" name="outputGroupBox">
+             <property name="title">
+              <string>Ausgabeoptionen</string>
+             </property>
+             <layout class="QGridLayout" name="outputLayout">
+              <property name="horizontalSpacing">
+               <number>12</number>
+              </property>
+              <property name="verticalSpacing">
+               <number>10</number>
+              </property>
+              <item row="0" column="0">
+               <widget class="QLabel" name="outputFormatLabel">
+                <property name="text">
+                 <string>Format:</string>
+                </property>
+               </widget>
+              </item>
+              <item row="0" column="1">
+               <widget class="QComboBox" name="outputFormatComboBox">
+                <item>
+                 <property name="text">
+                  <string>excel</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>csv</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>json</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>yaml</string>
+                 </property>
+                </item>
+               </widget>
+              </item>
+              <item row="1" column="0">
+               <widget class="QLabel" name="outputFileLabel">
+                <property name="text">
+                 <string>Dateiname:</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="1">
+               <layout class="QHBoxLayout" name="outputFileRowLayout">
+                <property name="spacing">
+                 <number>10</number>
+                </property>
+                <item>
+                 <widget class="QLineEdit" name="outputFileLineEdit">
+                  <property name="clearButtonEnabled">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="browseOutputButton">
+                  <property name="text">
+                   <string>Speichern unter</string>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </item>
+              <item row="2" column="0" colspan="2">
+               <widget class="QCheckBox" name="autoOutputCheckBox">
+                <property name="text">
+                 <string>Daten automatisch ausgeben</string>
+                </property>
+                <property name="checked">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="0" colspan="2">
+               <widget class="QLabel" name="outputHintLabel">
+                <property name="text">
+                 <string>Der Dateiname wird automatisch auf das gewählte Format abgestimmt.</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QGroupBox" name="dateGroupBox">
+             <property name="title">
+              <string>Datumsbereich</string>
+             </property>
+             <layout class="QHBoxLayout" name="dateLayout">
+              <property name="spacing">
+               <number>12</number>
+              </property>
+              <item>
+               <widget class="QLabel" name="fromDateLabel">
+                <property name="text">
+                 <string>Von:</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QDateEdit" name="fromDateEdit">
+                <property name="calendarPopup">
+                 <bool>true</bool>
+                </property>
+                <property name="displayFormat">
+                 <string>dd.MM.yyyy</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <spacer name="dateSpacer">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>40</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+              <item>
+               <widget class="QLabel" name="toDateLabel">
+                <property name="text">
+                 <string>Bis:</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QDateEdit" name="toDateEdit">
+                <property name="calendarPopup">
+                 <bool>true</bool>
+                </property>
+                <property name="displayFormat">
+                 <string>dd.MM.yyyy</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="statusFrame">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="statusLayout">
+              <property name="leftMargin">
+               <number>14</number>
+              </property>
+              <property name="topMargin">
+               <number>10</number>
+              </property>
+              <property name="rightMargin">
+               <number>14</number>
+              </property>
+              <property name="bottomMargin">
+               <number>10</number>
+              </property>
+              <property name="spacing">
+               <number>4</number>
+              </property>
+              <item>
+               <widget class="QLabel" name="statusTitleLabel">
+                <property name="text">
+                 <string>Status</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="statusValueLabel">
+                <property name="text">
+                 <string>Bereit</string>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QProgressBar" name="progressBar">
+             <property name="value">
+              <number>0</number>
+             </property>
+             <property name="textVisible">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="buttonRowLayout">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <property name="spacing">
+              <number>8</number>
+             </property>
+             <item>
+              <spacer name="buttonSpacer">
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>40</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item>
+              <widget class="QPushButton" name="fetchDataButton">
+               <property name="text">
+                <string>Daten vom Server abrufen</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="tariffTab">
+      <attribute name="title">
+       <string>Einstellungen</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="tariffTabLayout">
+       <property name="leftMargin">
+        <number>24</number>
+       </property>
+       <property name="topMargin">
+        <number>24</number>
+       </property>
+       <property name="rightMargin">
+        <number>24</number>
+       </property>
+       <property name="bottomMargin">
+        <number>24</number>
+       </property>
+       <property name="spacing">
+        <number>18</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="tariffIntroLabel">
+         <property name="text">
+          <string>Diese Felder werden in der Excel-Arbeitsmappe auf dem Blatt &quot;Einstellungen&quot; in die Zellen B3, B4 und B7 geschrieben.</string>
+         </property>
+         <property name="wordWrap">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QFrame" name="tariffFrame">
+         <property name="frameShape">
+          <enum>QFrame::StyledPanel</enum>
+         </property>
+         <layout class="QFormLayout" name="tariffFormLayout">
+          <property name="leftMargin">
+           <number>18</number>
+          </property>
+          <property name="topMargin">
+           <number>18</number>
+          </property>
+          <property name="rightMargin">
+           <number>18</number>
+          </property>
+          <property name="bottomMargin">
+           <number>18</number>
+          </property>
+          <property name="horizontalSpacing">
+           <number>16</number>
+          </property>
+          <property name="verticalSpacing">
+           <number>14</number>
+          </property>
+          <item row="0" column="0">
+           <widget class="QLabel" name="tariffGoLabel">
+            <property name="text">
+             <string>Tarif Go 00:00-04:59 (ct/kWh)</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QLineEdit" name="tariffGoLineEdit"/>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="tariffStandardLabel">
+            <property name="text">
+             <string>Tarif Standard 05:00-23:59 (ct/kWh)</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLineEdit" name="tariffStandardLineEdit"/>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="basePriceLabel">
+            <property name="text">
+             <string>Grundpreis pro Monat (€)</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QLineEdit" name="basePriceLineEdit"/>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="tariffButtonRowLayout">
+         <item>
+          <spacer name="tariffButtonSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QPushButton" name="saveSettingsButton">
+           <property name="text">
+            <string>Einstellungen speichern</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <spacer name="tariffBottomSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>40</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="analysisTab">
+      <attribute name="title">
+       <string>Datenansicht</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="analysisTabLayout">
+       <property name="leftMargin">
+        <number>24</number>
+       </property>
+       <property name="topMargin">
+        <number>24</number>
+       </property>
+       <property name="rightMargin">
+        <number>24</number>
+       </property>
+       <property name="bottomMargin">
+        <number>24</number>
+       </property>
+       <property name="spacing">
+        <number>18</number>
+       </property>
+       <item>
+        <widget class="QFrame" name="analysisControlsFrame">
+         <property name="frameShape">
+          <enum>QFrame::StyledPanel</enum>
+         </property>
+         <layout class="QHBoxLayout" name="analysisControlsLayout">
+          <property name="leftMargin">
+           <number>18</number>
+          </property>
+          <property name="topMargin">
+           <number>16</number>
+          </property>
+          <property name="rightMargin">
+           <number>18</number>
+          </property>
+          <property name="bottomMargin">
+           <number>16</number>
+          </property>
+          <property name="spacing">
+           <number>12</number>
+          </property>
+          <item>
+           <widget class="QComboBox" name="viewModeComboBox">
+            <item>
+             <property name="text">
+              <string>Tag</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Woche</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Monat</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Jahr</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item>
+           <widget class="QDateEdit" name="viewDateEdit">
+            <property name="calendarPopup">
+             <bool>true</bool>
+            </property>
+            <property name="displayFormat">
+             <string>dd.MM.yyyy</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="viewCalendarButton">
+            <property name="text">
+             <string>Kal</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="viewPreviousButton">
+            <property name="text">
+             <string>&lt;</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="viewNextButton">
+            <property name="text">
+             <string>&gt;</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <spacer name="analysisControlsSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QWidget" name="unitToggleWidget">
+            <layout class="QHBoxLayout" name="unitToggleLayout">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <property name="spacing">
+              <number>8</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="viewKwhLabel">
+               <property name="text">
+                <string>kWh</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QCheckBox" name="viewCurrencyCheckBox">
+               <property name="text">
+                <string/>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="viewEuroLabel">
+               <property name="text">
+                <string>€</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QFrame" name="analysisSummaryFrame">
+         <property name="frameShape">
+          <enum>QFrame::StyledPanel</enum>
+         </property>
+         <layout class="QVBoxLayout" name="analysisSummaryLayout">
+          <property name="leftMargin">
+           <number>20</number>
+          </property>
+          <property name="topMargin">
+           <number>18</number>
+          </property>
+          <property name="rightMargin">
+           <number>20</number>
+          </property>
+          <property name="bottomMargin">
+           <number>18</number>
+          </property>
+          <property name="spacing">
+           <number>6</number>
+          </property>
+          <item>
+           <widget class="QLabel" name="viewRangeLabel">
+            <property name="text">
+             <string>Keine Daten</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="viewTotalCaptionLabel">
+            <property name="text">
+             <string>Gesamtverbrauch</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="viewTotalValueLabel">
+            <property name="text">
+             <string>0,000 kWh</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QTabWidget" name="analysisContentTabs">
+         <property name="currentIndex">
+          <number>0</number>
+         </property>
+         <widget class="QWidget" name="diagramTab">
+          <attribute name="title">
+           <string>Diagramm</string>
+          </attribute>
+          <layout class="QVBoxLayout" name="diagramTabLayout">
+           <property name="leftMargin">
+            <number>12</number>
+           </property>
+           <property name="topMargin">
+            <number>12</number>
+           </property>
+           <property name="rightMargin">
+            <number>12</number>
+           </property>
+           <property name="bottomMargin">
+            <number>12</number>
+           </property>
+           <item>
+            <widget class="QFrame" name="chartContainer">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="chartContainerLayout">
+              <property name="leftMargin">
+               <number>12</number>
+              </property>
+              <property name="topMargin">
+               <number>12</number>
+              </property>
+              <property name="rightMargin">
+               <number>12</number>
+              </property>
+              <property name="bottomMargin">
+               <number>12</number>
+              </property>
+             </layout>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="analysisDataTab">
+          <attribute name="title">
+           <string>Daten</string>
+          </attribute>
+          <layout class="QVBoxLayout" name="analysisDataTabLayout">
+           <property name="leftMargin">
+            <number>12</number>
+           </property>
+           <property name="topMargin">
+            <number>12</number>
+           </property>
+           <property name="rightMargin">
+            <number>12</number>
+           </property>
+           <property name="bottomMargin">
+            <number>12</number>
+           </property>
+           <item>
+            <widget class="QFrame" name="analysisTableFrame">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="analysisTableFrameLayout">
+              <property name="leftMargin">
+               <number>12</number>
+              </property>
+              <property name="topMargin">
+               <number>12</number>
+              </property>
+              <property name="rightMargin">
+               <number>12</number>
+              </property>
+              <property name="bottomMargin">
+               <number>12</number>
+              </property>
+              <item>
+               <widget class="QTableView" name="analysisTableView"/>
+              </item>
+             </layout>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -1,8 +1,12 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
 export LC_ALL=en_US.utf8
-pip3 install briefcase
+python3 -m pip install briefcase
 rm -rf build/
 rm -rf dist/
 rm -rf logs/
-briefcase create macOS Xcode
-briefcase build macOS Xcode
-briefcase package macOS Xcode
+python3 -m briefcase create macOS Xcode
+python3 -m briefcase build macOS Xcode
+python3 -m briefcase package macOS Xcode
