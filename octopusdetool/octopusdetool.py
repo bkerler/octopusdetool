@@ -29,6 +29,9 @@ except ZoneInfoNotFoundError:
     APP_TIMEZONE = datetime.now().astimezone().tzinfo or timezone(timedelta(hours=1))
 
 EXCEL_TEMPLATE_FILENAME = "smartmeter_daten.xlsx"
+DEFAULT_TARIFF_GO_CT = 15.92
+DEFAULT_TARIFF_STANDARD_CT = 29.13
+DEFAULT_MONTHLY_BASE_PRICE_EUR = 15.94
 
 
 def get_bundled_excel_template_path() -> Path:
@@ -87,6 +90,56 @@ def get_default_output_path() -> Path:
 def get_default_excel_path() -> Path:
     """Get the default Excel output path shown in the UI/CLI."""
     return get_smartmeter_data_folder() / EXCEL_TEMPLATE_FILENAME
+
+
+def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, float]:
+    """Read tariff defaults from the Excel template, falling back to built-in values."""
+    defaults = {
+        "tariff_go_ct": DEFAULT_TARIFF_GO_CT,
+        "tariff_standard_ct": DEFAULT_TARIFF_STANDARD_CT,
+        "monthly_base_price_eur": DEFAULT_MONTHLY_BASE_PRICE_EUR,
+    }
+
+    try:
+        import openpyxl
+    except ImportError:
+        return defaults
+
+    workbook_path = template_path or ensure_excel_template()
+    workbook_path = Path(workbook_path)
+    if not workbook_path.exists():
+        return defaults
+
+    try:
+        wb = openpyxl.load_workbook(workbook_path, data_only=True, read_only=True)
+        ws = wb["Einstellungen"]
+        values = {
+            "tariff_go_ct": ws["B3"].value,
+            "tariff_standard_ct": ws["B4"].value,
+            "monthly_base_price_eur": ws["B7"].value,
+        }
+        wb.close()
+    except Exception:
+        return defaults
+
+    for key, default in defaults.items():
+        try:
+            if values[key] is not None:
+                defaults[key] = float(values[key])
+        except (TypeError, ValueError):
+            defaults[key] = default
+
+    return defaults
+
+
+def get_tariff_rate_ct(
+    reading_start: datetime,
+    tariff_go_ct: float = DEFAULT_TARIFF_GO_CT,
+    tariff_standard_ct: float = DEFAULT_TARIFF_STANDARD_CT,
+) -> float:
+    """Return the tariff in ct/kWh for the given interval start."""
+    normalized_start = normalize_datetime(reading_start)
+    return tariff_go_ct if 0 <= normalized_start.hour <= 4 else tariff_standard_ct
 
 
 # German Octopus Energy API endpoints
@@ -591,7 +644,14 @@ def save_to_yaml(readings: list, output_path: Path) -> bool:
         return False
 
 
-def fill_excel_template(readings: list, template_path: str, output_path: str):
+def fill_excel_template(
+    readings: list,
+    template_path: str,
+    output_path: str,
+    tariff_go_ct: float = DEFAULT_TARIFF_GO_CT,
+    tariff_standard_ct: float = DEFAULT_TARIFF_STANDARD_CT,
+    monthly_base_price_eur: float = DEFAULT_MONTHLY_BASE_PRICE_EUR,
+):
     """
     Fill a German electricity tariff Excel template with consumption data.
     
@@ -667,16 +727,22 @@ def fill_excel_template(readings: list, template_path: str, output_path: str):
         last_date = csv_dates[-1]
         print(f"CSV-Datumsbereich: {first_date} bis {last_date}")
         
-        # Update Einstellungen sheet: B5 = start date, B6 = end date
+        # Update Einstellungen sheet: B3/B4/B7 = tariffs, B5 = start date, B6 = end date
         print(f"\nUpdating Einstellungen sheet:")
+        ws_einstellungen['B3'].value = float(tariff_go_ct)
+        ws_einstellungen['B4'].value = float(tariff_standard_ct)
+        ws_einstellungen['B7'].value = float(monthly_base_price_eur)
         first_date_dt = datetime.strptime(first_date, "%Y-%m-%d")
         last_date_dt = datetime.strptime(last_date, "%Y-%m-%d")
-        
+
         # Format as German date (DD.MM.YYYY) for the Excel
         ws_einstellungen['B5'].value = first_date_dt
         ws_einstellungen['B6'].value = last_date_dt
+        print(f"  B3 (Tarif Go): {tariff_go_ct}")
+        print(f"  B4 (Tarif Standard): {tariff_standard_ct}")
         print(f"  B5 (Start): {first_date}")
         print(f"  B6 (Ende): {last_date}")
+        print(f"  B7 (Grundpreis): {monthly_base_price_eur}")
         
         # Template structure for Verbrauch sheet
         DATA_START_ROW = 9

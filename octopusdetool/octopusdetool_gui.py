@@ -9,43 +9,60 @@ Octopus Energy Germany API and saving it to CSV, Excel, JSON, or YAML.
 from __future__ import annotations
 
 import base64
+import calendar
 import csv
 import hashlib
+import io
 import json
 import os
 import sys
 import traceback
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TypeVar
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from PySide6.QtCore import QDate, QFile, QIODeviceBase, QObject
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QDate, QFile, QIODeviceBase, QObject, QSize, Qt
+from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
+    QCalendarWidget,
     QCheckBox,
     QComboBox,
     QDateEdit,
     QFileDialog,
+    QFrame,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
     QProgressBar,
+    QSizePolicy,
+    QMenu,
     QScrollArea,
+    QTableView,
+    QTabWidget,
+    QToolTip,
+    QVBoxLayout,
     QWidget,
 )
 
-from octopusdetool import (
+from octopusdetool.analysis_view import DisplayBucket, TariffChartView
+from octopusdetool.octopusdetool import (
+    DEFAULT_MONTHLY_BASE_PRICE_EUR,
+    DEFAULT_TARIFF_GO_CT,
+    DEFAULT_TARIFF_STANDARD_CT,
     OctopusGermanyClient,
     ensure_excel_template,
     fill_excel_template,
     format_datetime,
     get_default_output_path,
     get_smartmeter_data_folder,
+    load_excel_tariff_settings,
     normalize_datetime,
     save_to_json,
     save_to_yaml,
@@ -57,12 +74,110 @@ CONFIG_ENCRYPTION_VERSION = 1
 CONFIG_ENCRYPTED_FIELDS = ("email", "password")
 CONFIG_AES_KEY = hashlib.sha256(b"octopusdetool_rocks!").digest()
 CONFIG_SAVE_FLAG = "save_config_enabled"
+AUTO_OUTPUT_FLAG = "auto_output_enabled"
 OUTPUT_EXTENSIONS = {
     "excel": ".xlsx",
     "csv": ".csv",
     "json": ".json",
     "yaml": ".yaml",
 }
+GERMAN_MONTH_NAMES = [
+    "Januar",
+    "Februar",
+    "Maerz",
+    "April",
+    "Mai",
+    "Juni",
+    "Juli",
+    "August",
+    "September",
+    "Oktober",
+    "November",
+    "Dezember",
+]
+GERMAN_MONTH_ABBR = [
+    "Jan",
+    "Feb",
+    "Maerz",
+    "Apr",
+    "Mai",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Okt",
+    "Nov",
+    "Dez",
+]
+GERMAN_WEEKDAY_NAMES = [
+    "Montag",
+    "Dienstag",
+    "Mittwoch",
+    "Donnerstag",
+    "Freitag",
+    "Samstag",
+    "Sonntag",
+]
+GERMAN_WEEKDAY_ABBR = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+STATUS_CHECK_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAA7EAAAOxAGVKw4bAAAB4klEQVRoge2WsUtW"
+    "URjGf5oEQQS6BEFxoD+gQCFwMAicqkPSVFM5NQhBIORwKDmDQa5FReIgUfOLSxZoBC1CmIPzgVIEl1ILdLAGv0Hw+HXv"
+    "e79rBO9v+85z7vM+D/e7hwOGYRiGYRjGf0vbvxjqUzgD3AbOA0eBLWBGXHxW1qujxdma4lNoB+4DD9gNvpe3Gs9DK+BT"
+    "OA68AS5n5Cfi4nON76EU8Cl0ATNAd0aeBu5qvWv/BnwKncAscC4jfwb6xMWfWv9aC/gUjgHvgd6M/A24IC6uVJnRXuXh"
+    "ZvgU2oAp8uE3gatVw0ONBYCHwPXM+g5wU1xcaMWQWv5CPoUrgBzgPywujrdqlqpA4zy/BtwCeoAgLk40tNPAAtCVeXRS"
+    "XBzURc2jPUbfAZf2/B4BJhrFXpEP/wm4o5x3IKXfgE/hBPAjI11k94Mdy2jLQI+4uFp23t/QvIENYJv9V4HXwMnM/i1g"
+    "oI7woDiFxMXfwFJGOgUcyawPiYvzZecURXuMfii4b1JcfKmcUQhtASmwZwkYUvoXRltgDvjaRN8GboiLv5T+hVEVEBd3"
+    "gBdNtoyKi4u6SOWocpV4Cqxn1r8Ajyv4lqLSVcKn0A/cA84C34GPwCNxca0F2QzDMAzDMAzDqJc/AHFqjRWuBmQAAAAA"
+    "SUVORK5CYII="
+)
+STATUS_CROSS_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAA7EAAAOxAGVKw4bAAACCElEQVRoge3XP2sU"
+    "QRjH8c+qkFZBRFALjZ1e5RvIH0FNI1goKvcCRAthrfUVbGFvt9jEYBTLgFHEzi7+aRRB7bQXIXAWuQ3JecntzCxCYL7t"
+    "znP7/fHczDxLJpPJZDKZPc6gXx74HzXj2Jf6A4N+eQ3vBv3ySEDNAj4O+uXJ1PcXKcVD+cfYjw+YLerq54SaBTzFFL5h"
+    "pqirr7EO0QFG5Bt2DTEi35AUIirADvIN7zE3GmLQLy9h2Xb5hugQwQEmyDdsCzHolxfxzHj5hqgQQQEG/XIKn9Bm861h"
+    "HudMlm94WNTV3RCnoFOoqKs/OI/vLZb38FZ7+UWUIT7E74FpvMLxmPoxLOJmUVfroYUpp1BXIaLlSb8HTmNVfIgnuBEr"
+    "T2IANjvxGscCS5Pl6SAAm514g6MtS5ZxNVWeDmahIdM4FLj+YBcv7uIvdAHPtTsqt7KG+Umz0yRSN3GsfENyiJRjNFW+"
+    "Yezs1JbYi6wr+YboEMGbOFD+BX60WHcWqyEfRQ1BAYbD3CPt5JdwBbPahTiDByE+xA1zC/g1YekSrhd1tV7U1WfMmBxi"
+    "BfdCfIjfAz28xOExjzflR2p2m51WcLmoq9+hLlEXWVFXa5jzbyfGyg9rvtjoxOgoHi1P+j2wtRM7yo/UnLLRiRMS5enm"
+    "Ju7hDm63nW2GIe7jVop8JpPJZDKZTGaP8xedeMcuVRjS0gAAAABJRU5ErkJggg=="
+)
+CALENDAR_ICON_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAA7EAAAOxAGVKw4bAAADzElEQVRoge2X3Usc"
+    "VxjGf+/M7hpdP3BjQxvS+oF6YbZNQNpir7L2otKaRoi52UIrlmLYG8Eqza2VKrmoIAj+BXsRKAWvKm5LpREtJJrQNrXF"
+    "xEaLSbbqlhRd1+3OnF5oFrea4IyDtDA/WBjOnPd9nmfnzJkZcHFxcXFx+R8jdorWXq8ulkyJBGZmHifq60tKS+0buPNg"
+    "c9N/IqlVeI7nkZnZkAkyVuotB9hofO2yEq4CGciEUJ4JBV6rfbIGlPkpmnZaKS6C+mHVXHmzcuJ+6qD1HquCptAkUCyK"
+    "u+hq1TRYE6Haap8dDGXKkobKB/xAQ6l54gW4/9tBG2g2hUGZH/tjtx7oSn2ye9j7wUeg5/4veVd6obhkbwvUt0UTN64V"
+    "GDf6RWQJEcmzaMPyFcgicn7t3CuzSmjKafhOC8b1CcjPRyWTiNeDVl2LHjyDWvlje5KmYf76M6IkuH7u1bMbwnHgOTs2"
+    "bAdQ8GGefqxNKaX/+5xWF0R7qQLz0UPEXwiA+AvxNJ0HpciMfrE9UXhedLmpUAJooMyUJ2Na8WF/CYkI4EFE0D143r4A"
+    "Ph+CgFIgsv3bwfjxNlp5JdqL5Rg/3c6OK9BBnvjI+P7W0lZs2F9CuzEy6C+fxfvuRTJff4X5yx28Fy6h1WyQ+e4bzLUVS"
+    "KUwbn4PpoK0JY/PxJkAwNbVXtB1MAwANi+/D+b2cebLa8jJU+inz7D1+WdOSQIOBgCy5oGs+SeotVVSvVdQD5cdlbQc4"
+    "NEboa2TFeVoYv/2eRqJRILHiXW4PnPgGssBfg+9tXWqoQFd37P5HJq/7t1jaXER+vsPXOPsEtohnU7j9XoREdbX1/edo"
+    "2kaBQUFh9ZyLIBhGExOThKNRtXCwoLEYjEAKisr951fX1/P2NjYoXUdCTA9PU04HFbLy8sCSG1tbfZca2trzty5uTmmp"
+    "qaoqqpyQtqZAPF4nJqaGmlra1MDAwM5b7gjIyPZY6UUzc3N6LpOJBJxQvoQT+JdtLS0MD4+TkdHh4g8/Q19dnaWWCxGY"
+    "2MjwWDQCWlnAhwEpRSDg4MAdHZ2Kqf6HlmA+fl5RkdHqaurIxQK2foS3I8jCaCUYmhoiHQ6TSQSweu1/QG3hyMJEI/Hi"
+    "UajlJWVEQ6HHe19JAGGh4dJJpO0t7dTWFjoaG9Hn8R+v5/u7m4CgUB2zDRNAoEAPT09jm2du3E0QFFREX19fTljmqbR1"
+    "dXlpEwOdgLcWlxcfM/n8zm+/BKJxLxpmgkrNXa2M4nFYkEROWaj9pmkUqm7zc3Nfzrd18XFxcXFxcXF5T/KP/cWO467"
+    "9H7sAAAAAElFTkSuQmCC"
+)
+TRASH_ICON_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAA7EAAAOxAGVKw4bAAADyElEQVRoge3YW8hV"
+    "RRQH8N/+vJJbrVNeKiIrI027QEhlRRRZWS9hdDNIwqISInsUNLBCe0i6UBKJ9RJBD5lFWZlBJYlpZamYlPR9WJiGTl5G"
+    "Q1Onh9kSfFTE2afoYf9fzpm99sxaa89a/7VmaNCgQYMGNVB0crEYUh8Mx0iUGIgD2IPd2F22ithJnbUciCH1x/W4ARdj"
+    "LAYgYZ9seIEhskNd2I6N+ATvlK3iyzo2tO1ADGkGZmME1uBdrMNmfF+2iiO93u+Hs3C27OwkXISvMbNsFSvbtaUd41+M"
+    "IR2KIc2PIY2osc7JMaQF1VrTOmnj3ykdF0NKMaTpHVxzdgxpZztzu9qYc0r1u60dhX+BXRhSkcC/ixjSwBhSTwxpVwxp"
+    "RgxpUI21yhjSQzGk/TGkl9pZo60kjiGNwTKcIdPkp/gYX2ALespWcbjXnAEYhTMxAZfjMhyHtzC1bBX7/xMHKoMexRyZ"
+    "Kof2Eh9BQJTDdDBO6KXvcPXOcFxatorV7djRTg4cwwbsxW9Yicl4pZJ9hp9wamXgj/imks3DJTLlDpVrxsZ2jajjwHq5"
+    "QK3HMLRwnlwPtuK5SrYFT+EQXsBVGIe+cth1d7o6/yPEkPrEkA7EkCbFkC6MIR2NIT1Wyd6PIe2JIZ0UQ7qgks2tZIti"
+    "SAdjSKfFkObFkJbWsaNuK7EGmzAaH+AOvIw7q+e/yAm7BNOwGHfJBDBWDq/lZauYU8eOtlF9zRRDWlaNH6jGk2NIx1e7"
+    "cEw2rZJNiSF1xZA2VOPb6tjQt6YP6+TmrH8MaRGuwC14Bj/jcVwZQ1pcyW7GE5gq79B4mQzaRp0kJjdiI/E0puM1mdO3"
+    "YwyWYi7uxhtlq1iCtbgRq+TE/raOAXVzYLBcB3ZgChagH1bgQyyU+f5ezMdBOS+ex9syA51fx4ZaO1C2in3oljl/E3rk"
+    "Sru5+t8XR2Uq/QgT8Z4cet1qhg/1Q4gcRqPwHfbjHMyUWekePCKHzUT5PHCfHD7n+p848JVc0LbJX79EH/yKQXI13uOP"
+    "VmIfTpQr8Pq6yju1A11yY7ZWDp+5uBrPysk9EYvkUFqN2+Xwqr0DdWmU7ECBa3GNnMC3yskc5G5zgnyEXCV3oTvlA/4P"
+    "HdBfHzGknVVRmlWN36yK2LAY0uiq5Xi1ki2s3l3RCd0duVaJIT0oF6+tcsN2Pz6X86KffG4YLzd4s6pnN5WtYnld3R27"
+    "F4ohTcDDuE7uTP8MO/A6nixbRXcn9Hb0YgtiSAVOl6l1qHy42YstZavo5Dm6QYMGDRo0aNCgQYMG9fA7K0q4aHsy7twA"
+    "AAAASUVORK5CYII="
+)
+_EMBEDDED_PIXMAP_CACHE: dict[str, QPixmap] = {}
 WidgetType = TypeVar("WidgetType", bound=QObject)
 
 
@@ -82,6 +197,149 @@ class _TeeStream:
             stream.flush()
 
 
+def _pixmap_from_base64(encoded_png: str) -> QPixmap:
+    pixmap = _EMBEDDED_PIXMAP_CACHE.get(encoded_png)
+    if pixmap is None:
+        loaded = QPixmap()
+        loaded.loadFromData(base64.b64decode(encoded_png), "PNG")
+        _EMBEDDED_PIXMAP_CACHE[encoded_png] = loaded
+        pixmap = loaded
+    return pixmap
+
+
+def _icon_from_base64(encoded_png: str) -> QIcon:
+    return QIcon(_pixmap_from_base64(encoded_png))
+
+
+class StatusIndicatorCheckBox(QCheckBox):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMinimumHeight(30)
+        self.setStyleSheet("background: transparent; border: none;")
+
+    def sizeHint(self) -> QSize:
+        metrics = self.fontMetrics()
+        text_width = metrics.horizontalAdvance(self.text())
+        return QSize(text_width + 44, max(30, metrics.height() + 10))
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        opacity = 1.0 if self.isEnabled() else 0.45
+        painter.setOpacity(opacity)
+
+        indicator_size = 24
+        indicator_rect = self.rect().adjusted(0, 0, 0, 0)
+        indicator_rect.setWidth(indicator_size)
+        indicator_rect.setHeight(indicator_size)
+        indicator_rect.moveTop((self.height() - indicator_size) // 2)
+
+        painter.setPen(QColor("#6f4df6"))
+        painter.setBrush(QColor("#2e1160"))
+        painter.drawRoundedRect(indicator_rect, 6, 6)
+
+        icon_source = STATUS_CHECK_PNG_B64 if self.isChecked() else STATUS_CROSS_PNG_B64
+        icon_pixmap = _pixmap_from_base64(icon_source)
+        icon_rect = indicator_rect.adjusted(1, 1, -1, -1)
+        painter.drawPixmap(icon_rect, icon_pixmap)
+
+        text_rect = self.rect().adjusted(indicator_size + 12, 0, 0, 0)
+        text_color = QColor("#f4eeff") if self.isEnabled() else QColor("#a498cb")
+        painter.setPen(text_color)
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
+
+        if self.hasFocus():
+            painter.setPen(QColor("#bfb4ff"))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            focus_rect = self.rect().adjusted(0, 1, -1, -2)
+            painter.drawRoundedRect(focus_rect, 6, 6)
+
+        painter.end()
+
+
+class CurrencyToggleSwitch(QCheckBox):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._pressed_inside = False
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(58, 32)
+        self.setText("")
+        self.setStyleSheet("background: transparent; border: none;")
+
+    def sizeHint(self) -> QSize:
+        return QSize(58, 32)
+
+    def hitButton(self, pos) -> bool:
+        return self.rect().contains(pos)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self._pressed_inside = True
+            self.setDown(True)
+            event.accept()
+            return
+        self._pressed_inside = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._pressed_inside:
+            self.setDown(self.rect().contains(event.position().toPoint()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            should_toggle = self._pressed_inside and self.rect().contains(event.position().toPoint())
+            self._pressed_inside = False
+            self.setDown(False)
+            if should_toggle:
+                self.click()
+                event.accept()
+                return
+        self._pressed_inside = False
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, _event) -> None:
+        track_rect = self.rect().adjusted(1, 3, -1, -3)
+        knob_diameter = track_rect.height() - 6
+        knob_x = track_rect.left() + 3
+        if self.isChecked():
+            knob_x = track_rect.right() - knob_diameter - 2
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QColor("#bfb4ff"))
+        painter.setBrush(QColor("#d9d3ff"))
+        painter.drawRoundedRect(track_rect, track_rect.height() / 2, track_rect.height() / 2)
+
+        knob_rect = track_rect.adjusted(3, 3, 0, -3)
+        knob_rect.setLeft(knob_x)
+        knob_rect.setWidth(knob_diameter)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#6f4df6"))
+        painter.drawEllipse(knob_rect)
+        painter.end()
+
+
+class ViewCalendarPopup(QFrame):
+    def __init__(self, parent: QWidget):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setObjectName("viewCalendarPopup")
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        self.calendar = QCalendarWidget(self)
+        self.calendar.setFirstDayOfWeek(Qt.DayOfWeek.Monday)
+        self.calendar.setGridVisible(True)
+        layout.addWidget(self.calendar)
+
+
 class OctopusSmartMeterGUI:
     WINDOW_SCREEN_FRACTION = 0.92
     RESIZE_STEP = 20
@@ -90,13 +348,24 @@ class OctopusSmartMeterGUI:
         self.app = app
         self.window = self._load_ui()
         self._bind_widgets()
+        self._clear_line_edit_actions: list = []
+        self._replace_line_edit_clear_buttons()
+        self._replace_data_tab_checkboxes()
+        self._replace_currency_toggle()
+        self._setup_analysis_widgets()
+        self._setup_view_calendar_popup()
+        self._apply_popup_styling()
+        self._configure_tooltip_palette()
+        self._configure_view_calendar_button()
         self._set_window_icon()
 
-        ensure_excel_template()
+        self.template_path = ensure_excel_template()
+        self.default_tariff_settings = load_excel_tariff_settings(self.template_path)
         self.csv_path = get_default_output_path()
         self.existing_data: list[dict] = []
         self.latest_timestamp: datetime | None = None
         self.last_output_format = "excel"
+        self._analysis_date_initialized = False
 
         self._set_initial_values()
         self._connect_signals()
@@ -125,6 +394,7 @@ class OctopusSmartMeterGUI:
         return widget
 
     def _bind_widgets(self) -> None:
+        self.main_tab_widget = self._find_widget(QTabWidget, "mainTabWidget")
         self.scroll_area = self._find_widget(QScrollArea, "scrollArea")
         self.scroll_area_contents = self._find_widget(QWidget, "scrollAreaWidgetContents")
         self.email_line_edit = self._find_widget(QLineEdit, "emailLineEdit")
@@ -133,21 +403,281 @@ class OctopusSmartMeterGUI:
         self.save_config_checkbox = self._find_widget(QCheckBox, "saveConfigCheckBox")
         self.debug_checkbox = self._find_widget(QCheckBox, "debugCheckBox")
         self.output_format_combo = self._find_widget(QComboBox, "outputFormatComboBox")
+        self.auto_output_checkbox = self._find_widget(QCheckBox, "autoOutputCheckBox")
         self.output_file_line_edit = self._find_widget(QLineEdit, "outputFileLineEdit")
         self.browse_output_button = self._find_widget(QPushButton, "browseOutputButton")
         self.from_date_edit = self._find_widget(QDateEdit, "fromDateEdit")
         self.to_date_edit = self._find_widget(QDateEdit, "toDateEdit")
         self.status_value_label = self._find_widget(QLabel, "statusValueLabel")
         self.progress_bar = self._find_widget(QProgressBar, "progressBar")
+        progress_policy = self.progress_bar.sizePolicy()
+        progress_policy.setRetainSizeWhenHidden(True)
+        self.progress_bar.setSizePolicy(progress_policy)
         self.fetch_data_button = self._find_widget(QPushButton, "fetchDataButton")
 
+        self.tariff_go_line_edit = self._find_widget(QLineEdit, "tariffGoLineEdit")
+        self.tariff_standard_line_edit = self._find_widget(QLineEdit, "tariffStandardLineEdit")
+        self.base_price_line_edit = self._find_widget(QLineEdit, "basePriceLineEdit")
+        self.save_settings_button = self._find_widget(QPushButton, "saveSettingsButton")
+
+        self.view_mode_combo = self._find_widget(QComboBox, "viewModeComboBox")
+        self.view_date_edit = self._find_widget(QDateEdit, "viewDateEdit")
+        self.view_calendar_button = self._find_widget(QPushButton, "viewCalendarButton")
+        self.view_previous_button = self._find_widget(QPushButton, "viewPreviousButton")
+        self.view_next_button = self._find_widget(QPushButton, "viewNextButton")
+        self.view_currency_checkbox = self._find_widget(QCheckBox, "viewCurrencyCheckBox")
+        self.view_range_label = self._find_widget(QLabel, "viewRangeLabel")
+        self.view_total_caption_label = self._find_widget(QLabel, "viewTotalCaptionLabel")
+        self.view_total_value_label = self._find_widget(QLabel, "viewTotalValueLabel")
+        self.analysis_content_tabs = self._find_widget(QTabWidget, "analysisContentTabs")
+        self.analysis_table_view = self._find_widget(QTableView, "analysisTableView")
+        self.chart_container = self._find_widget(QFrame, "chartContainer")
+
+    def _replace_currency_toggle(self) -> None:
+        placeholder = self.view_currency_checkbox
+        parent = placeholder.parentWidget()
+        layout = parent.layout() if parent is not None else None
+        if layout is None:
+            return
+
+        replacement = CurrencyToggleSwitch(parent)
+        replacement.setObjectName("viewCurrencyCheckBox")
+        replacement.setChecked(placeholder.isChecked())
+        replacement.setToolTip(placeholder.toolTip())
+        replacement.setAccessibleName("Waehrungsschalter")
+
+        layout.replaceWidget(placeholder, replacement)
+        placeholder.hide()
+        placeholder.setParent(None)
+        placeholder.deleteLater()
+        self.view_currency_checkbox = replacement
+
+    def _replace_line_edit_clear_buttons(self) -> None:
+        for line_edit in (
+            self.email_line_edit,
+            self.password_line_edit,
+            self.output_file_line_edit,
+        ):
+            line_edit.setClearButtonEnabled(False)
+            action = line_edit.addAction(
+                _icon_from_base64(TRASH_ICON_PNG_B64),
+                QLineEdit.ActionPosition.TrailingPosition,
+            )
+            action.setToolTip("Feld leeren")
+            action.triggered.connect(line_edit.clear)
+            action.setVisible(bool(line_edit.text()))
+            line_edit.textChanged.connect(lambda text, clear_action=action: clear_action.setVisible(bool(text)))
+            self._clear_line_edit_actions.append(action)
+
+    def _replace_data_tab_checkboxes(self) -> None:
+        for attribute_name in (
+            "show_password_checkbox",
+            "save_config_checkbox",
+            "debug_checkbox",
+            "auto_output_checkbox",
+        ):
+            placeholder = getattr(self, attribute_name)
+            parent = placeholder.parentWidget()
+            layout = parent.layout() if parent is not None else None
+            if layout is None:
+                continue
+
+            replacement = StatusIndicatorCheckBox(parent)
+            replacement.setObjectName(placeholder.objectName())
+            replacement.setText(placeholder.text())
+            replacement.setToolTip(placeholder.toolTip())
+            replacement.setStatusTip(placeholder.statusTip())
+            replacement.setWhatsThis(placeholder.whatsThis())
+            replacement.setChecked(placeholder.isChecked())
+            replacement.setEnabled(placeholder.isEnabled())
+            replacement.setSizePolicy(placeholder.sizePolicy())
+            replacement.setAccessibleName(placeholder.accessibleName() or placeholder.text())
+
+            layout.replaceWidget(placeholder, replacement)
+            placeholder.hide()
+            placeholder.setParent(None)
+            placeholder.deleteLater()
+            setattr(self, attribute_name, replacement)
+
+    def _setup_analysis_widgets(self) -> None:
+        chart_layout = self.chart_container.layout()
+        if chart_layout is None:
+            chart_layout = QVBoxLayout(self.chart_container)
+            chart_layout.setContentsMargins(12, 12, 12, 12)
+
+        self.chart_view = TariffChartView(self.chart_container)
+        chart_layout.addWidget(self.chart_view)
+
+        self.analysis_table_model = QStandardItemModel(self.analysis_table_view)
+        self.analysis_table_view.setModel(self.analysis_table_model)
+        self.analysis_table_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.analysis_table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
+        self.analysis_table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.analysis_table_view.setAlternatingRowColors(True)
+        self.analysis_table_view.verticalHeader().hide()
+        self.analysis_table_view.horizontalHeader().setStretchLastSection(True)
+        self.analysis_table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.analysis_table_view.customContextMenuRequested.connect(
+            self._show_analysis_table_context_menu
+        )
+
+    def _setup_view_calendar_popup(self) -> None:
+        self.view_calendar_popup = ViewCalendarPopup(self.window)
+        self.view_calendar_popup.setStyleSheet(self.window.styleSheet())
+        self.view_calendar_popup.calendar.clicked.connect(self._on_view_calendar_date_selected)
+
+    def _apply_popup_styling(self) -> None:
+        popup_stylesheet = """
+QListView {
+    background-color: #240748;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    outline: 0;
+    padding: 0;
+    margin: 0;
+}
+
+QListView::item {
+    background-color: #240748;
+    color: #f4eeff;
+    border: none;
+    padding: 10px 16px;
+    margin: 0;
+}
+
+QListView::item:selected {
+    background-color: #6f4df6;
+    color: #ffffff;
+}
+"""
+        for combo in (self.view_mode_combo, self.output_format_combo):
+            view = combo.view()
+            view.setStyleSheet(popup_stylesheet)
+            view.setFrameShape(QFrame.Shape.NoFrame)
+            view.setContentsMargins(0, 0, 0, 0)
+            view.viewport().setStyleSheet("background-color: #240748;")
+            popup_window = view.window()
+            popup_window.setStyleSheet("background-color: #240748; border: 1px solid #6f4df6;")
+            popup_window.setContentsMargins(0, 0, 0, 0)
+
+    def _configure_tooltip_palette(self) -> None:
+        palette = QToolTip.palette()
+        palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#240748"))
+        palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#ffffff"))
+        palette.setColor(QPalette.ColorRole.Window, QColor("#240748"))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor("#ffffff"))
+        QToolTip.setPalette(palette)
+
+    def _configure_view_calendar_button(self) -> None:
+        self.view_calendar_button.setText("")
+        self.view_calendar_button.setIcon(_icon_from_base64(CALENDAR_ICON_PNG_B64))
+        self.view_calendar_button.setIconSize(QSize(30, 30))
+        self.view_calendar_button.setToolTip("Kalender öffnen")
+        self.view_calendar_button.setAccessibleName("Kalender öffnen")
+
+    def _copy_text_to_clipboard(self, text: str) -> None:
+        QApplication.clipboard().setText(text)
+
+    def _analysis_table_row_to_csv(self, row: int) -> str:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        values = []
+        for column in range(self.analysis_table_model.columnCount()):
+            item = self.analysis_table_model.item(row, column)
+            values.append("" if item is None else item.text())
+        writer.writerow(values)
+        return output.getvalue().strip("\r\n")
+
+    def _analysis_table_all_to_csv(self) -> str:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        headers = [
+            self.analysis_table_model.headerData(column, Qt.Orientation.Horizontal)
+            for column in range(self.analysis_table_model.columnCount())
+        ]
+        writer.writerow(headers)
+        for row in range(self.analysis_table_model.rowCount()):
+            writer.writerow(
+                [
+                    "" if self.analysis_table_model.item(row, column) is None else self.analysis_table_model.item(row, column).text()
+                    for column in range(self.analysis_table_model.columnCount())
+                ]
+            )
+        return output.getvalue()
+
+    def _save_analysis_table_as_csv(self) -> None:
+        default_path = self._ensure_output_suffix(
+            self._get_default_output_path("csv").with_name("datenansicht_export.csv"),
+            "csv",
+        )
+        filename, _ = QFileDialog.getSaveFileName(
+            self.window,
+            "Alle Werte als CSV speichern",
+            str(default_path),
+            "CSV-Dateien (*.csv)",
+        )
+        if not filename:
+            return
+        target = self._ensure_output_suffix(Path(filename), "csv")
+        target.write_text(self._analysis_table_all_to_csv(), encoding="utf-8", newline="")
+        self._set_status(f"Tabellenwerte als CSV gespeichert: {target}")
+
+    def _show_analysis_table_context_menu(self, position) -> None:
+        index = self.analysis_table_view.indexAt(position)
+        if index.isValid():
+            self.analysis_table_view.setCurrentIndex(index)
+
+        current_index = self.analysis_table_view.currentIndex()
+        has_current = current_index.isValid()
+        has_rows = self.analysis_table_model.rowCount() > 0
+
+        menu = QMenu(self.analysis_table_view)
+        copy_value_action = menu.addAction("Wert kopieren")
+        copy_row_action = menu.addAction("Zeile kopieren")
+        copy_all_action = menu.addAction("Alle Werte kopieren")
+        save_all_action = menu.addAction("Alle Werte in .csv speichern")
+
+        copy_value_action.setEnabled(has_current)
+        copy_row_action.setEnabled(has_current)
+        copy_all_action.setEnabled(has_rows)
+        save_all_action.setEnabled(has_rows)
+
+        selected_action = menu.exec(self.analysis_table_view.viewport().mapToGlobal(position))
+        if selected_action is None:
+            return
+
+        if selected_action is copy_value_action and has_current:
+            self._copy_text_to_clipboard(current_index.data() or "")
+        elif selected_action is copy_row_action and has_current:
+            self._copy_text_to_clipboard(self._analysis_table_row_to_csv(current_index.row()))
+        elif selected_action is copy_all_action and has_rows:
+            self._copy_text_to_clipboard(self._analysis_table_all_to_csv())
+        elif selected_action is save_all_action and has_rows:
+            self._save_analysis_table_as_csv()
+
     def _set_initial_values(self) -> None:
+        self.main_tab_widget.setCurrentIndex(0)
+        self.analysis_content_tabs.setCurrentIndex(0)
         self.from_date_edit.setDate(QDate(2024, 1, 1))
         self.to_date_edit.setDate(QDate.currentDate())
         self.output_format_combo.setCurrentText("excel")
+        self.auto_output_checkbox.setChecked(True)
         self.output_file_line_edit.setText(str(self._get_default_output_path("excel")))
         self.progress_bar.hide()
         self._toggle_password_visibility(False)
+        self._set_tariff_inputs(
+            self.default_tariff_settings.get("tariff_go_ct", DEFAULT_TARIFF_GO_CT),
+            self.default_tariff_settings.get("tariff_standard_ct", DEFAULT_TARIFF_STANDARD_CT),
+            self.default_tariff_settings.get(
+                "monthly_base_price_eur",
+                DEFAULT_MONTHLY_BASE_PRICE_EUR,
+            ),
+        )
+        self.view_mode_combo.setCurrentIndex(0)
+        self.view_date_edit.setDate(QDate.currentDate())
+        self.view_currency_checkbox.setChecked(False)
+        self._configure_view_date_edit()
+        self._refresh_analysis_view()
 
     def _connect_signals(self) -> None:
         self.show_password_checkbox.toggled.connect(self._toggle_password_visibility)
@@ -155,6 +685,16 @@ class OctopusSmartMeterGUI:
         self.output_file_line_edit.editingFinished.connect(self._normalize_output_entry)
         self.browse_output_button.clicked.connect(self.browse_output_file)
         self.fetch_data_button.clicked.connect(self.get_data)
+        self.tariff_go_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
+        self.tariff_standard_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
+        self.base_price_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
+        self.save_settings_button.clicked.connect(self._save_settings_from_tab)
+        self.view_mode_combo.currentIndexChanged.connect(self._on_view_mode_changed)
+        self.view_calendar_button.clicked.connect(self._open_view_calendar_popup)
+        self.view_date_edit.dateChanged.connect(lambda _date: self._refresh_analysis_view())
+        self.view_currency_checkbox.toggled.connect(lambda _checked: self._refresh_analysis_view())
+        self.view_previous_button.clicked.connect(lambda: self._shift_view_date(-1))
+        self.view_next_button.clicked.connect(lambda: self._shift_view_date(1))
 
     def _set_window_icon(self) -> None:
         icon = QIcon()
@@ -340,6 +880,8 @@ class OctopusSmartMeterGUI:
             print(f"[STATUS] {message}")
         if update:
             self.app.processEvents()
+            if self.progress_bar.isVisible() and self.scroll_area.verticalScrollBar().maximum() > 0:
+                self._fit_window_to_content()
 
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self.window, "Fehler", message)
@@ -393,6 +935,86 @@ class OctopusSmartMeterGUI:
         except ValueError:
             date_edit.setDate(fallback)
 
+    def _set_tariff_inputs(self, tariff_go_ct: float, tariff_standard_ct: float, base_price_eur: float) -> None:
+        self.tariff_go_line_edit.setText(f"{tariff_go_ct:.2f}")
+        self.tariff_standard_line_edit.setText(f"{tariff_standard_ct:.2f}")
+        self.base_price_line_edit.setText(f"{base_price_eur:.2f}")
+
+    def _parse_decimal_input(self, raw_value: str) -> float:
+        cleaned = (
+            raw_value.strip()
+            .replace("ct/kWh", "")
+            .replace("EUR", "")
+            .replace("€", "")
+            .replace(" ", "")
+            .replace(",", ".")
+        )
+        if not cleaned:
+            raise ValueError("Missing numeric input")
+        return float(cleaned)
+
+    def _get_config_decimal(self, config: dict, key: str, fallback: float) -> float:
+        value = config.get(key, fallback)
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                return self._parse_decimal_input(value)
+            except ValueError:
+                return fallback
+        return fallback
+
+    def _get_tariff_values(self, *, show_error: bool) -> tuple[float, float, float] | None:
+        field_specs = (
+            (
+                self.tariff_go_line_edit,
+                "Tarif Go 00:00-04:59 (ct/kWh)",
+                self.default_tariff_settings.get("tariff_go_ct", DEFAULT_TARIFF_GO_CT),
+            ),
+            (
+                self.tariff_standard_line_edit,
+                "Tarif Standard 05:00-23:59 (ct/kWh)",
+                self.default_tariff_settings.get("tariff_standard_ct", DEFAULT_TARIFF_STANDARD_CT),
+            ),
+            (
+                self.base_price_line_edit,
+                "Grundpreis pro Monat (EUR)",
+                self.default_tariff_settings.get(
+                    "monthly_base_price_eur",
+                    DEFAULT_MONTHLY_BASE_PRICE_EUR,
+                ),
+            ),
+        )
+
+        parsed_values: list[float] = []
+        for line_edit, label, fallback in field_specs:
+            try:
+                parsed_values.append(self._parse_decimal_input(line_edit.text()))
+            except ValueError:
+                if show_error:
+                    self._show_error(f"Ungueltiger Wert fuer '{label}'. Bitte eine Zahl eingeben.")
+                    line_edit.setFocus()
+                    return None
+                parsed_values.append(float(fallback))
+
+        return tuple(parsed_values)  # type: ignore[return-value]
+
+    def _on_tariff_fields_edited(self) -> None:
+        values = self._get_tariff_values(show_error=False)
+        if values is None:
+            return
+        self._set_tariff_inputs(*values)
+        self._refresh_analysis_view()
+
+    def _save_settings_from_tab(self) -> None:
+        values = self._get_tariff_values(show_error=True)
+        if values is None:
+            return
+
+        self._set_tariff_inputs(*values)
+        self._refresh_analysis_view()
+        self.save_config(force=True)
+
     def on_format_changed(self, _value: str | None = None) -> None:
         previous_format = getattr(self, "last_output_format", "excel")
         format_type = self.output_format_combo.currentText()
@@ -422,10 +1044,338 @@ class OctopusSmartMeterGUI:
                 str(self._ensure_output_suffix(Path(filename), format_type))
             )
 
+    def _current_view_mode(self) -> str:
+        mode_mapping = {
+            "Tag": "day",
+            "Woche": "week",
+            "Monat": "month",
+            "Jahr": "year",
+        }
+        return mode_mapping.get(self.view_mode_combo.currentText(), "day")
+
+    def _configure_view_date_edit(self) -> None:
+        mode = self._current_view_mode()
+        display_format = {
+            "day": "dd.MM.yyyy",
+            "week": "dd.MM.yyyy",
+            "month": "MM.yyyy",
+            "year": "yyyy",
+        }.get(mode, "dd.MM.yyyy")
+        self.view_date_edit.setDisplayFormat(display_format)
+
+        current_date = self.view_date_edit.date()
+        normalized_date = current_date
+        if mode == "month":
+            normalized_date = QDate(current_date.year(), current_date.month(), 1)
+        elif mode == "year":
+            normalized_date = QDate(current_date.year(), 1, 1)
+
+        if normalized_date != current_date:
+            self.view_date_edit.blockSignals(True)
+            self.view_date_edit.setDate(normalized_date)
+            self.view_date_edit.blockSignals(False)
+
+    def _on_view_mode_changed(self) -> None:
+        self._configure_view_date_edit()
+        self._refresh_analysis_view()
+
+    def _open_view_calendar_popup(self) -> None:
+        mode = self._current_view_mode()
+        calendar = self.view_calendar_popup.calendar
+        calendar.setSelectedDate(self.view_date_edit.date())
+        calendar.setCurrentPage(self.view_date_edit.date().year(), self.view_date_edit.date().month())
+        if mode == "week":
+            calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.ISOWeekNumbers)
+        else:
+            calendar.setVerticalHeaderFormat(QCalendarWidget.VerticalHeaderFormat.NoVerticalHeader)
+
+        popup_pos = self.view_calendar_button.mapToGlobal(self.view_calendar_button.rect().bottomLeft())
+        self.view_calendar_popup.adjustSize()
+        self.view_calendar_popup.move(popup_pos)
+        self.view_calendar_popup.show()
+        self.view_calendar_popup.raise_()
+        self.view_calendar_popup.activateWindow()
+
+    def _on_view_calendar_date_selected(self, selected_date: QDate) -> None:
+        mode = self._current_view_mode()
+        normalized = selected_date
+        if mode == "week":
+            normalized = selected_date.addDays(1 - selected_date.dayOfWeek())
+        elif mode == "month":
+            normalized = QDate(selected_date.year(), selected_date.month(), 1)
+        elif mode == "year":
+            normalized = QDate(selected_date.year(), 1, 1)
+
+        self.view_date_edit.setDate(normalized)
+        self.view_calendar_popup.hide()
+
+    def _shift_view_date(self, step: int) -> None:
+        current_date = self.view_date_edit.date()
+        mode = self._current_view_mode()
+        if mode == "day":
+            target_date = current_date.addDays(step)
+        elif mode == "week":
+            target_date = current_date.addDays(step * 7)
+        elif mode == "month":
+            target_date = current_date.addMonths(step)
+        else:
+            target_date = current_date.addYears(step)
+
+        self.view_date_edit.setDate(target_date)
+
+    def _qdate_to_date(self, qdate: QDate) -> date:
+        return date(qdate.year(), qdate.month(), qdate.day())
+
+    def _format_decimal(self, value: float, decimals: int) -> str:
+        formatted = f"{value:,.{decimals}f}"
+        return formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+
+    def _format_period_label(self, period_date: date) -> str:
+        return f"{period_date.day}. {GERMAN_MONTH_NAMES[period_date.month - 1]} {period_date.year}"
+
+    def _calculate_base_price_share(
+        self,
+        start_date: date,
+        end_date: date,
+        monthly_base_price_eur: float,
+    ) -> float:
+        total = 0.0
+        cursor = date(start_date.year, start_date.month, 1)
+
+        while cursor <= end_date:
+            days_in_month = calendar.monthrange(cursor.year, cursor.month)[1]
+            month_start = cursor
+            month_end = date(cursor.year, cursor.month, days_in_month)
+            overlap_start = max(start_date, month_start)
+            overlap_end = min(end_date, month_end)
+            if overlap_start <= overlap_end:
+                covered_days = (overlap_end - overlap_start).days + 1
+                total += monthly_base_price_eur * covered_days / days_in_month
+
+            if cursor.month == 12:
+                cursor = date(cursor.year + 1, 1, 1)
+            else:
+                cursor = date(cursor.year, cursor.month + 1, 1)
+
+        return total
+
+    def _set_default_analysis_date(self, *, force: bool = False) -> None:
+        if not self.existing_data:
+            return
+
+        latest_start = max(normalize_datetime(reading["start"]) for reading in self.existing_data)
+        target_date = QDate(latest_start.year, latest_start.month, latest_start.day)
+
+        if force or not self._analysis_date_initialized:
+            self.view_date_edit.blockSignals(True)
+            self.view_date_edit.setDate(target_date)
+            self.view_date_edit.blockSignals(False)
+            self._analysis_date_initialized = True
+            self._configure_view_date_edit()
+
+    def _build_analysis_buckets(
+        self,
+        mode: str,
+        selected_date: date,
+    ) -> tuple[list[DisplayBucket], str, str, date, date]:
+        if mode == "day":
+            start_date = selected_date
+            end_date = selected_date
+            buckets = [
+                DisplayBucket(
+                    axis_label=f"{hour:02d}",
+                    tooltip_label=f"{selected_date.strftime('%d.%m.%Y')} {hour:02d}:00",
+                )
+                for hour in range(24)
+            ]
+            title = self._format_period_label(selected_date)
+            first_column_title = "Stunde"
+        elif mode == "week":
+            start_date = selected_date - timedelta(days=selected_date.weekday())
+            end_date = start_date + timedelta(days=6)
+            buckets = []
+            for offset in range(7):
+                current_day = start_date + timedelta(days=offset)
+                buckets.append(
+                    DisplayBucket(
+                        axis_label=GERMAN_WEEKDAY_ABBR[offset],
+                        tooltip_label=f"{GERMAN_WEEKDAY_NAMES[offset]}, {current_day.strftime('%d.%m.%Y')}",
+                    )
+                )
+            iso_year, iso_week, _ = start_date.isocalendar()
+            title = (
+                f"Woche {iso_week}/{iso_year} "
+                f"({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})"
+            )
+            first_column_title = "Tag"
+        elif mode == "month":
+            start_date = date(selected_date.year, selected_date.month, 1)
+            days_in_month = calendar.monthrange(selected_date.year, selected_date.month)[1]
+            end_date = date(selected_date.year, selected_date.month, days_in_month)
+            buckets = []
+            for day_index in range(days_in_month):
+                current_day = start_date + timedelta(days=day_index)
+                buckets.append(
+                    DisplayBucket(
+                        axis_label=f"{current_day.day:02d}",
+                        tooltip_label=current_day.strftime("%d.%m.%Y"),
+                    )
+                )
+            title = f"{GERMAN_MONTH_NAMES[selected_date.month - 1]} {selected_date.year}"
+            first_column_title = "Tag"
+        else:
+            start_date = date(selected_date.year, 1, 1)
+            end_date = date(selected_date.year, 12, 31)
+            buckets = [
+                DisplayBucket(
+                    axis_label=GERMAN_MONTH_ABBR[month - 1],
+                    tooltip_label=f"{GERMAN_MONTH_NAMES[month - 1]} {selected_date.year}",
+                )
+                for month in range(1, 13)
+            ]
+            title = str(selected_date.year)
+            first_column_title = "Monat"
+
+        start_dt = datetime(start_date.year, start_date.month, start_date.day)
+        end_dt = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
+
+        for reading in self.existing_data:
+            reading_start = normalize_datetime(reading["start"])
+            if reading_start < start_dt or reading_start >= end_dt:
+                continue
+
+            if mode == "day":
+                index = reading_start.hour
+            elif mode in {"week", "month"}:
+                index = (reading_start.date() - start_date).days
+            else:
+                index = reading_start.month - 1
+
+            if not 0 <= index < len(buckets):
+                continue
+
+            if 0 <= reading_start.hour <= 4:
+                buckets[index].go_kwh += float(reading["consumption_kwh"])
+            else:
+                buckets[index].standard_kwh += float(reading["consumption_kwh"])
+
+        return buckets, title, first_column_title, start_date, end_date
+
+    def _populate_analysis_table(
+        self,
+        buckets: list[DisplayBucket],
+        first_column_title: str,
+        *,
+        show_currency: bool,
+        tariff_go_ct: float,
+        tariff_standard_ct: float,
+    ) -> None:
+        self.analysis_table_model.clear()
+        unit_title = "EUR" if show_currency else "kWh"
+        self.analysis_table_model.setHorizontalHeaderLabels(
+            [first_column_title, "Tarif Go", "Tarif Standard", f"Gesamt ({unit_title})"]
+        )
+
+        for bucket in buckets:
+            if show_currency:
+                go_value = f"{self._format_decimal(bucket.go_cost_eur(tariff_go_ct), 2)} EUR"
+                standard_value = (
+                    f"{self._format_decimal(bucket.standard_cost_eur(tariff_standard_ct), 2)} EUR"
+                )
+                total_value = (
+                    f"{self._format_decimal(bucket.total_cost_eur(tariff_go_ct, tariff_standard_ct), 2)} EUR"
+                )
+            else:
+                go_value = f"{self._format_decimal(bucket.go_kwh, 3)} kWh"
+                standard_value = f"{self._format_decimal(bucket.standard_kwh, 3)} kWh"
+                total_value = f"{self._format_decimal(bucket.total_kwh, 3)} kWh"
+
+            row_items = [
+                QStandardItem(bucket.tooltip_label),
+                QStandardItem(go_value),
+                QStandardItem(standard_value),
+                QStandardItem(total_value),
+            ]
+
+            for item in row_items[1:]:
+                item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            self.analysis_table_model.appendRow(row_items)
+
+        header = self.analysis_table_view.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+
+    def _refresh_analysis_view(self) -> None:
+        tariff_values = self._get_tariff_values(show_error=False)
+        if tariff_values is None:
+            tariff_go_ct = DEFAULT_TARIFF_GO_CT
+            tariff_standard_ct = DEFAULT_TARIFF_STANDARD_CT
+            monthly_base_price_eur = DEFAULT_MONTHLY_BASE_PRICE_EUR
+        else:
+            tariff_go_ct, tariff_standard_ct, monthly_base_price_eur = tariff_values
+
+        selected_date = self._qdate_to_date(self.view_date_edit.date())
+        mode = self._current_view_mode()
+        show_currency = self.view_currency_checkbox.isChecked()
+        buckets, title, first_column_title, start_date, end_date = self._build_analysis_buckets(
+            mode,
+            selected_date,
+        )
+
+        total_kwh = sum(bucket.total_kwh for bucket in buckets)
+        variable_total_eur = sum(
+            bucket.total_cost_eur(tariff_go_ct, tariff_standard_ct) for bucket in buckets
+        )
+        has_readings = total_kwh > 0
+        base_price_share = (
+            self._calculate_base_price_share(start_date, end_date, monthly_base_price_eur)
+            if has_readings
+            else 0.0
+        )
+        base_price_label = {
+            "day": "Grundpreis pro Tag",
+            "week": "Grundpreis pro Woche",
+            "month": "Grundpreis pro Monat",
+            "year": "Grundpreis pro Jahr",
+        }.get(mode, "Grundpreis")
+
+        self.view_range_label.setText(title)
+        if show_currency:
+            self.view_total_caption_label.setText(
+                "Gesamtkosten inkl. "
+                f"{self._format_decimal(base_price_share, 2)} EUR {base_price_label}"
+            )
+            self.view_total_value_label.setText(
+                f"{self._format_decimal(variable_total_eur + base_price_share, 2)} EUR"
+            )
+        else:
+            self.view_total_caption_label.setText("Gesamtverbrauch")
+            self.view_total_value_label.setText(f"{self._format_decimal(total_kwh, 3)} kWh")
+
+        self.chart_view.update_buckets(
+            buckets,
+            show_currency=show_currency,
+            tariff_go_ct=tariff_go_ct,
+            tariff_standard_ct=tariff_standard_ct,
+            category_axis_title=first_column_title,
+            value_axis_title="€" if show_currency else "kWh",
+        )
+        self._populate_analysis_table(
+            buckets,
+            first_column_title,
+            show_currency=show_currency,
+            tariff_go_ct=tariff_go_ct,
+            tariff_standard_ct=tariff_standard_ct,
+        )
+
     def load_config(self) -> None:
         get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
 
         if not CONFIG_FILE.exists():
+            self._refresh_analysis_view()
             return
 
         try:
@@ -441,6 +1391,7 @@ class OctopusSmartMeterGUI:
             self.password_line_edit.setText(config.get("password", ""))
             self.save_config_checkbox.setChecked(bool(config_saving_enabled))
             self.debug_checkbox.setChecked(bool(config.get("debug", False)))
+            self.auto_output_checkbox.setChecked(bool(config.get(AUTO_OUTPUT_FLAG, True)))
 
             self.output_format_combo.blockSignals(True)
             self.output_format_combo.setCurrentText(saved_format)
@@ -458,11 +1409,35 @@ class OctopusSmartMeterGUI:
 
             self._set_date_from_string(self.from_date_edit, config.get("from_date", "01.01.2024"), QDate(2024, 1, 1))
             self.to_date_edit.setDate(QDate.currentDate())
+            self._set_tariff_inputs(
+                self._get_config_decimal(
+                    config,
+                    "tariff_go_ct",
+                    self.default_tariff_settings.get("tariff_go_ct", DEFAULT_TARIFF_GO_CT),
+                ),
+                self._get_config_decimal(
+                    config,
+                    "tariff_standard_ct",
+                    self.default_tariff_settings.get(
+                        "tariff_standard_ct",
+                        DEFAULT_TARIFF_STANDARD_CT,
+                    ),
+                ),
+                self._get_config_decimal(
+                    config,
+                    "monthly_base_price_eur",
+                    self.default_tariff_settings.get(
+                        "monthly_base_price_eur",
+                        DEFAULT_MONTHLY_BASE_PRICE_EUR,
+                    ),
+                ),
+            )
 
             self.on_format_changed(saved_format)
+            self._refresh_analysis_view()
 
             if migrated:
-                self._set_status("Konfiguration geladen und Zugangsdaten verschlüsselt migriert")
+                self._set_status("Konfiguration geladen und Zugangsdaten verschluesselt migriert")
             else:
                 self._set_status("Konfiguration aus config.json geladen")
         except Exception as exc:
@@ -476,6 +1451,7 @@ class OctopusSmartMeterGUI:
 
             if not self.csv_path.exists():
                 self._set_status("Keine consumption.csv gefunden. Bereit zum Abruf aller Daten.")
+                self._refresh_analysis_view()
                 return
 
             with open(self.csv_path, "r", newline="", encoding="utf-8") as csv_file:
@@ -505,24 +1481,36 @@ class OctopusSmartMeterGUI:
 
             if not self.existing_data:
                 self._set_status("Keine bestehenden Daten gefunden. Bereit zum Abruf.")
+                self._refresh_analysis_view()
                 return
+
+            self._set_default_analysis_date()
+            self._refresh_analysis_view()
 
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             if self.latest_timestamp and self.latest_timestamp.date() >= (today - timedelta(days=1)).date():
                 self._set_status(
-                    f"CSV ist aktuell: {len(self.existing_data)} Einträge bis {self.latest_timestamp.date()}."
+                    f"CSV ist aktuell: {len(self.existing_data)} Eintraege bis {self.latest_timestamp.date()}."
                 )
             else:
                 self._set_status(
-                    f"{len(self.existing_data)} Einträge gefunden. Letzter: {self.latest_timestamp}. "
+                    f"{len(self.existing_data)} Eintraege gefunden. Letzter: {self.latest_timestamp}. "
                     "Fehlende Daten werden abgerufen."
                 )
         except Exception as exc:
             self._set_status(f"Fehler beim Lesen der CSV: {exc}")
 
-    def save_config(self) -> None:
-        if not self.save_config_checkbox.isChecked():
+    def save_config(self, *, force: bool = False) -> None:
+        if not force and not self.save_config_checkbox.isChecked():
             return
+
+        tariff_values = self._get_tariff_values(show_error=False)
+        if tariff_values is None:
+            tariff_go_ct = DEFAULT_TARIFF_GO_CT
+            tariff_standard_ct = DEFAULT_TARIFF_STANDARD_CT
+            monthly_base_price_eur = DEFAULT_MONTHLY_BASE_PRICE_EUR
+        else:
+            tariff_go_ct, tariff_standard_ct, monthly_base_price_eur = tariff_values
 
         get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
 
@@ -532,16 +1520,20 @@ class OctopusSmartMeterGUI:
             "output_format": self.output_format_combo.currentText(),
             "from_date": self._date_to_string(self.from_date_edit),
             "debug": self.debug_checkbox.isChecked(),
-            CONFIG_SAVE_FLAG: True,
+            AUTO_OUTPUT_FLAG: self.auto_output_checkbox.isChecked(),
+            "tariff_go_ct": tariff_go_ct,
+            "tariff_standard_ct": tariff_standard_ct,
+            "monthly_base_price_eur": monthly_base_price_eur,
+            CONFIG_SAVE_FLAG: self.save_config_checkbox.isChecked(),
             "output_file": str(self._get_normalized_output_path()),
             "excel_file": str(self._get_normalized_output_path()),
         }
 
         try:
             self._write_config(config)
-            self._set_status("Konfiguration in config.json gespeichert")
+            self._set_status("Zugangsdaten speichern")
         except Exception as exc:
-            self._set_status(f"Fehler beim Speichern der Konfiguration: {exc}")
+            self._set_status(f"Fehler beim Speichern der Zugangsdaten: {exc}")
 
     def validate_inputs(self) -> bool:
         if not self.email_line_edit.text().strip():
@@ -552,8 +1544,11 @@ class OctopusSmartMeterGUI:
             self._show_error("Passwort ist erforderlich!")
             return False
 
-        if not self.output_file_line_edit.text().strip():
-            self._show_error("Bitte wählen Sie einen Dateinamen aus!")
+        if self.auto_output_checkbox.isChecked() and not self.output_file_line_edit.text().strip():
+            self._show_error("Bitte waehlen Sie einen Dateinamen aus!")
+            return False
+
+        if self._get_tariff_values(show_error=True) is None:
             return False
 
         self._normalize_output_entry()
@@ -584,16 +1579,27 @@ class OctopusSmartMeterGUI:
         self.progress_bar.setRange(0, 0)
         self.progress_bar.show()
         self.app.processEvents()
+        self._fit_window_to_content()
 
     def _stop_progress(self) -> None:
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.hide()
         self.fetch_data_button.setEnabled(True)
+        self.app.processEvents()
+        self._fit_window_to_content()
 
     def get_data(self) -> None:
         if not self.validate_inputs():
             return
+
+        tariff_values = self._get_tariff_values(show_error=False)
+        if tariff_values is None:
+            tariff_go_ct = DEFAULT_TARIFF_GO_CT
+            tariff_standard_ct = DEFAULT_TARIFF_STANDARD_CT
+            monthly_base_price_eur = DEFAULT_MONTHLY_BASE_PRICE_EUR
+        else:
+            tariff_go_ct, tariff_standard_ct, monthly_base_price_eur = tariff_values
 
         data_dir = get_smartmeter_data_folder()
         data_dir.mkdir(parents=True, exist_ok=True)
@@ -648,21 +1654,21 @@ class OctopusSmartMeterGUI:
 
                         if not client.authenticate():
                             raise Exception(
-                                "Authentifizierung fehlgeschlagen! Überprüfen Sie Ihre E-Mail und Ihr Passwort."
+                                "Authentifizierung fehlgeschlagen! Ueberpruefen Sie Ihre E-Mail und Ihr Passwort."
                             )
 
                         self._set_status("Kundennummer wird ermittelt...", update=True)
                         accounts = client.get_accounts_from_viewer()
 
                         if not accounts:
-                            raise Exception("Kein Konto gefunden! Überprüfen Sie Ihre Zugangsdaten.")
+                            raise Exception("Kein Konto gefunden! Ueberpruefen Sie Ihre Zugangsdaten.")
 
                         if len(accounts) > 1:
                             account_list = "\n".join(
                                 [f"  - {account.get('number', 'unknown')}" for account in accounts]
                             )
                             raise Exception(
-                                f"Mehrere Konten gefunden ({len(accounts)}). Bitte wählen Sie ein Konto aus:\n{account_list}"
+                                f"Mehrere Konten gefunden ({len(accounts)}). Bitte waehlen Sie ein Konto aus:\n{account_list}"
                             )
 
                         account_number = accounts[0].get("number")
@@ -670,13 +1676,13 @@ class OctopusSmartMeterGUI:
                             f"Kundennummer gefunden: {account_number}",
                             update=True,
                         )
-                        self._set_status("Zähler werden ermittelt...", update=True)
+                        self._set_status("Zaehler werden ermittelt...", update=True)
 
                         meter_info = client.find_smart_meter(account_number)
                         if not meter_info:
                             raise Exception(
-                                "Kein Smart Meter für diesen Account gefunden!\n\n"
-                                "Mögliche Gründe:\n"
+                                "Kein Smart Meter fuer diesen Account gefunden!\n\n"
+                                "Moegliche Gruende:\n"
                                 "- Smart meter noch nicht eingerichtet\n"
                                 "- Kein smart meter gefunden\n"
                                 "- Falsche Kundennummer"
@@ -684,13 +1690,13 @@ class OctopusSmartMeterGUI:
 
                         malo_number, _meter_id, property_id = meter_info
                         self._set_status(
-                            f"Zähler für MALO {malo_number} gefunden, Daten werden abgerufen...",
+                            f"Zaehler fuer MALO {malo_number} gefunden, Daten werden abgerufen...",
                             update=True,
                         )
 
                         def update_progress(count: int, page: int) -> None:
                             self._set_status(
-                                f"Empfange Daten... {count} Einträge (Seite {page})",
+                                f"Empfange Daten... {count} Eintraege (Seite {page})",
                                 update=True,
                             )
 
@@ -705,10 +1711,10 @@ class OctopusSmartMeterGUI:
                         if not new_readings and not self.existing_data:
                             raise Exception(
                                 "Keine Verbrauchsdaten gefunden!\n\n"
-                                "Mögliche Gründe:\n"
+                                "Moegliche Gruende:\n"
                                 "- Smart Meter sendet noch keine Daten\n"
-                                "- Keine Messwerte verfügbar\n"
-                                "- Zählerproblem - kontaktieren Sie Octopus"
+                                "- Keine Messwerte verfuegbar\n"
+                                "- Zaehlerproblem - kontaktieren Sie Octopus"
                             )
 
                     all_readings = self.existing_data + new_readings
@@ -733,64 +1739,80 @@ class OctopusSmartMeterGUI:
                     output_path.parent.mkdir(parents=True, exist_ok=True)
 
                     self._set_status(
-                        f"Speichere {len(unique_data)} Einträge in consumption.csv...",
+                        f"Speichere {len(unique_data)} Eintraege in consumption.csv...",
                         update=True,
                     )
                     self._write_csv_file(self.csv_path, unique_data)
 
-                    if format_type == "excel":
-                        self._set_status("Excel-Datei wird gefüllt...", update=True)
-                        success = fill_excel_template(unique_data, str(output_path), str(output_path))
-                        if not success:
-                            raise Exception("Excel-Vorlage konnte nicht gefüllt werden")
+                    if self.auto_output_checkbox.isChecked():
+                        if format_type == "excel":
+                            self._set_status("Excel-Datei wird gefuellt...", update=True)
+                            success = fill_excel_template(
+                                unique_data,
+                                str(output_path),
+                                str(output_path),
+                                tariff_go_ct=tariff_go_ct,
+                                tariff_standard_ct=tariff_standard_ct,
+                                monthly_base_price_eur=monthly_base_price_eur,
+                            )
+                            if not success:
+                                raise Exception("Excel-Vorlage konnte nicht gefuellt werden")
 
-                        self._show_info(
-                            "Daten erfolgreich gespeichert!\n\n"
-                            f"CSV: consumption.csv ({len(unique_data)} Einträge)\n"
-                            f"Excel: {output_path}"
-                        )
-                    elif format_type == "csv":
-                        if output_path != self.csv_path.resolve():
+                            self._show_info(
+                                "Daten erfolgreich gespeichert!\n\n"
+                                f"CSV: consumption.csv ({len(unique_data)} Eintraege)\n"
+                                f"Excel: {output_path}"
+                            )
+                        elif format_type == "csv":
+                            if output_path != self.csv_path.resolve():
+                                self._set_status(
+                                    f"Speichere {len(unique_data)} Eintraege als CSV...",
+                                    update=True,
+                                )
+                                self._write_csv_file(output_path, unique_data)
+
+                            self._show_info(
+                                "Daten erfolgreich gespeichert!\n\n"
+                                f"CSV: {output_path}\n"
+                                f"Gesamteintraege: {len(unique_data)}"
+                            )
+                        elif format_type == "json":
                             self._set_status(
-                                f"Speichere {len(unique_data)} Einträge als CSV...",
+                                f"Speichere {len(unique_data)} Eintraege als JSON...",
                                 update=True,
                             )
-                            self._write_csv_file(output_path, unique_data)
+                            if not save_to_json(unique_data, output_path):
+                                raise Exception("Fehler beim Speichern als JSON")
 
+                            self._show_info(
+                                "Daten erfolgreich gespeichert!\n\n"
+                                f"JSON: {output_path}\n"
+                                f"Gesamteintraege: {len(unique_data)}"
+                            )
+                        elif format_type == "yaml":
+                            self._set_status(
+                                f"Speichere {len(unique_data)} Eintraege als YAML...",
+                                update=True,
+                            )
+                            if not save_to_yaml(unique_data, output_path):
+                                raise Exception("Fehler beim Speichern als YAML")
+
+                            self._show_info(
+                                "Daten erfolgreich gespeichert!\n\n"
+                                f"YAML: {output_path}\n"
+                                f"Gesamteintraege: {len(unique_data)}"
+                            )
+                    else:
                         self._show_info(
                             "Daten erfolgreich gespeichert!\n\n"
-                            f"CSV: {output_path}\n"
-                            f"Gesamteinträge: {len(unique_data)}"
-                        )
-                    elif format_type == "json":
-                        self._set_status(
-                            f"Speichere {len(unique_data)} Einträge als JSON...",
-                            update=True,
-                        )
-                        if not save_to_json(unique_data, output_path):
-                            raise Exception("Fehler beim Speichern als JSON")
-
-                        self._show_info(
-                            "Daten erfolgreich gespeichert!\n\n"
-                            f"JSON: {output_path}\n"
-                            f"Gesamteinträge: {len(unique_data)}"
-                        )
-                    elif format_type == "yaml":
-                        self._set_status(
-                            f"Speichere {len(unique_data)} Einträge als YAML...",
-                            update=True,
-                        )
-                        if not save_to_yaml(unique_data, output_path):
-                            raise Exception("Fehler beim Speichern als YAML")
-
-                        self._show_info(
-                            "Daten erfolgreich gespeichert!\n\n"
-                            f"YAML: {output_path}\n"
-                            f"Gesamteinträge: {len(unique_data)}"
+                            f"CSV: consumption.csv ({len(unique_data)} Eintraege)\n"
+                            "Automatische Ausgabe ist deaktiviert."
                         )
 
+                    self._set_default_analysis_date(force=True)
+                    self._refresh_analysis_view()
                     self._set_status(
-                        f"Fertig! Daten in Documents/smartmeter_data/ ({len(unique_data)} Einträge)"
+                        f"Fertig! Daten in Documents/smartmeter_data/ ({len(unique_data)} Eintraege)"
                     )
                 except Exception:
                     if self.debug_checkbox.isChecked():
