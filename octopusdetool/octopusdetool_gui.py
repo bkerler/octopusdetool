@@ -63,10 +63,11 @@ from octopusdetool.octopusdetool import (
     DEFAULT_TARIFF_HEAT_LOW_CT,
     DEFAULT_TARIFF_HEAT_STANDARD_CT,
     DEFAULT_TARIFF_STANDARD_CT,
+    DISPLAY_NAME_DYNAMIC_OCTOPUS,
+    DISPLAY_NAME_OCTOPUS_GO,
+    DISPLAY_NAME_OCTOPUS_HEAT,
     OctopusGermanyClient,
     TARIFF_INTELLIGENT_GO,
-    TARIFF_INTELLIGENT_GO_CODE,
-    TARIFF_INTELLIGENT_GO_LIGHT_CODE,
     TARIFF_INTELLIGENT_HEAT,
     TariffAgreement,
     TariffRate,
@@ -95,6 +96,7 @@ CONFIG_SAVE_FLAG = "save_config_enabled"
 AUTO_OUTPUT_FLAG = "auto_output_enabled"
 TARIFF_TYPE_CONFIG_KEY = "tariff_type"
 LAST_TARIFF_CODE_CONFIG_KEY = "last_tariff_code"
+LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY = "last_tariff_display_name"
 TARIFF_RATES_CONFIG_KEY = "tariff_rates"
 EXCEL_EXPORT_SUPPORTED_CONFIG_KEY = "excel_export_supported"
 EXCEL_EXPORT_REASON_CONFIG_KEY = "excel_export_reason"
@@ -383,7 +385,7 @@ class OctopusSmartMeterGUI:
         self._configure_view_calendar_button()
         self._set_window_icon()
         self.current_tariff_type = TARIFF_INTELLIGENT_GO
-        self.current_tariff_code = ""
+        self.current_tariff_display_name = ""
         self.current_tariff_valid_from = ""
         self.current_tariff_valid_to = ""
         self.current_tariff_rates: list[TariffRate] = []
@@ -956,7 +958,7 @@ QListView::item:selected {
 
         return parsed_rates
 
-    def _persist_requested_tariff_code(self, code: str) -> None:
+    def _persist_requested_tariff_display_name(self, display_name: str) -> None:
         get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
 
         if CONFIG_FILE.exists():
@@ -967,10 +969,10 @@ QListView::item:selected {
         else:
             config = {}
 
-        if config.get(LAST_TARIFF_CODE_CONFIG_KEY) == code:
+        if config.get(LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY) == display_name:
             return
 
-        config[LAST_TARIFF_CODE_CONFIG_KEY] = code
+        config[LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY] = display_name
         self._write_config(config)
 
     def _persist_manual_tariff_selection(self, tariff_type: str) -> None:
@@ -1258,12 +1260,15 @@ QListView::item:selected {
         self._refresh_analysis_view()
         self.save_config(force=True)
 
-    def _resolve_tariff_type_from_code(self, code: str) -> str | None:
-        if code == TARIFF_INTELLIGENT_GO_LIGHT_CODE:
+    def _resolve_tariff_type_from_display_name(self, display_name: str) -> str | None:
+        normalized_display_name = display_name.strip().lower()
+        if "lite" in normalized_display_name:
             return None
-        if code == TARIFF_INTELLIGENT_GO_CODE:
+        if DISPLAY_NAME_DYNAMIC_OCTOPUS in normalized_display_name:
+            return None
+        if DISPLAY_NAME_OCTOPUS_GO in normalized_display_name:
             return TARIFF_INTELLIGENT_GO
-        if "HEAT" in code:
+        if DISPLAY_NAME_OCTOPUS_HEAT in normalized_display_name:
             return TARIFF_INTELLIGENT_HEAT
         return None
 
@@ -1382,30 +1387,31 @@ QListView::item:selected {
         api_tariff_rates: list[TariffRate] | None = None,
     ) -> None:
         if agreement is None:
-            self.current_tariff_code = "None"
+            self.current_tariff_display_name = "None"
             self.current_tariff_valid_from = ""
             self.current_tariff_valid_to = ""
             self.current_tariff_rates = []
             self._set_excel_export_support(True)
             self.tariff_code_line_edit.setText("None")
-            self._persist_requested_tariff_code("None")
+            self._persist_requested_tariff_display_name("None")
             self.save_config()
             return
 
-        self.current_tariff_code = agreement.code
+        self.current_tariff_display_name = agreement.display_name
         self.current_tariff_valid_from = agreement.valid_from
         self.current_tariff_valid_to = agreement.valid_to or ""
         self.current_tariff_rates = list(api_tariff_rates or [])
-        self.tariff_code_line_edit.setText(agreement.code)
-        self._persist_requested_tariff_code(agreement.code)
+        self.tariff_code_label.setText("Tarif:")
+        self.tariff_code_line_edit.setText(agreement.display_name)
+        self._persist_requested_tariff_display_name(agreement.display_name)
 
-        detected_type = self._resolve_tariff_type_from_code(agreement.code)
+        detected_type = self._resolve_tariff_type_from_display_name(agreement.display_name)
         if detected_type is None:
             self._set_excel_export_support(False, "Excel-Export wird fuer diesen Tarif aktuell nicht unterstuetzt.")
             QMessageBox.warning(
                 self.window,
                 "Tarif nicht unterstuetzt",
-                f"Dieser code wird aktuell noch nicht unterstuetzt: {agreement.code}",
+                f"Dieser Tarif wird aktuell noch nicht unterstuetzt: {agreement.display_name}",
             )
             return
 
@@ -1823,9 +1829,12 @@ QListView::item:selected {
             self.output_format_combo.blockSignals(False)
             self.last_output_format = saved_format
             saved_tariff_type = config.get(TARIFF_TYPE_CONFIG_KEY, TARIFF_INTELLIGENT_GO)
-            saved_code = config.get(LAST_TARIFF_CODE_CONFIG_KEY, "None")
-            if saved_code not in {"", "None", None}:
-                inferred_tariff_type = self._resolve_tariff_type_from_code(saved_code)
+            saved_display_name = config.get(
+                LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY,
+                config.get(LAST_TARIFF_CODE_CONFIG_KEY, "None"),
+            )
+            if saved_display_name not in {"", "None", None}:
+                inferred_tariff_type = self._resolve_tariff_type_from_display_name(saved_display_name)
                 if inferred_tariff_type is not None:
                     saved_tariff_type = inferred_tariff_type
             self.current_tariff_type = saved_tariff_type
@@ -1882,8 +1891,13 @@ QListView::item:selected {
                     ),
                 ),
             )
-            self.current_tariff_code = saved_code if saved_code not in {None, ""} else "None"
-            self.tariff_code_line_edit.setText("" if self.current_tariff_code == "None" else self.current_tariff_code)
+            self.tariff_code_label.setText("Tarif:")
+            self.current_tariff_display_name = (
+                saved_display_name if saved_display_name not in {None, ""} else "None"
+            )
+            self.tariff_code_line_edit.setText(
+                "" if self.current_tariff_display_name == "None" else self.current_tariff_display_name
+            )
 
             self.on_format_changed(saved_format)
             self._refresh_analysis_view()
@@ -1977,7 +1991,7 @@ QListView::item:selected {
             "debug": self.debug_checkbox.isChecked(),
             AUTO_OUTPUT_FLAG: self.auto_output_checkbox.isChecked(),
             TARIFF_TYPE_CONFIG_KEY: tariff_type,
-            LAST_TARIFF_CODE_CONFIG_KEY: self.current_tariff_code or "None",
+            LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY: self.current_tariff_display_name or "None",
             "tariff_go_ct": tariff_go_ct,
             "tariff_standard_ct": tariff_standard_ct,
             "tariff_heat_low_ct": tariff_go_ct if tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_HEAT_LOW_CT,
@@ -1988,6 +2002,7 @@ QListView::item:selected {
             "output_file": str(self._get_normalized_output_path()),
             "excel_file": str(self._get_normalized_output_path()),
         }
+        config.pop(LAST_TARIFF_CODE_CONFIG_KEY, None)
 
         if self.current_tariff_rates:
             config[TARIFF_RATES_CONFIG_KEY] = self._serialize_tariff_rates()
@@ -2167,9 +2182,9 @@ QListView::item:selected {
                     property_id = None
                     malo_number = None
 
-                    should_refresh_tariff_code = need_to_fetch or not self.current_tariff_code
+                    should_refresh_tariff_display_name = need_to_fetch or not self.current_tariff_display_name
 
-                    if need_to_fetch or should_refresh_tariff_code:
+                    if need_to_fetch or should_refresh_tariff_display_name:
                         self._set_status("Authentifizierung...", update=True)
                         client = OctopusGermanyClient(
                             self.email_line_edit.text(),

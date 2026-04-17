@@ -44,8 +44,9 @@ DEFAULT_MONTHLY_BASE_PRICE_EUR = 15.94
 DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR = 14.50
 TARIFF_INTELLIGENT_GO = "Intelligent Go"
 TARIFF_INTELLIGENT_HEAT = "Intelligent Heat"
-TARIFF_INTELLIGENT_GO_LIGHT_CODE = "DEU-ELECTRICITY-IO-GO-LIGHT-24"
-TARIFF_INTELLIGENT_GO_CODE = "DEU-ELECTRICITY-IO-GO-24"
+DISPLAY_NAME_OCTOPUS_GO = "octopus go"
+DISPLAY_NAME_OCTOPUS_HEAT = "octopus heat"
+DISPLAY_NAME_DYNAMIC_OCTOPUS = "dynamicoctopus"
 
 
 class _WindowsGuid(ctypes.Structure):
@@ -70,11 +71,10 @@ class _WindowsGuid(ctypes.Structure):
 
 @dataclass(slots=True)
 class TariffAgreement:
-    code: str
+    display_name: str
     valid_from: str
     valid_to: str | None
     agreement_id: str | None = None
-    display_name: str | None = None
 
 
 @dataclass(slots=True)
@@ -597,7 +597,7 @@ def _extract_tariff_rates(unit_rate_information: dict | None) -> list[TariffRate
 
 
 def map_rate_structure_to_tariff_settings(
-    agreement_code: str,
+    agreement_display_name: str,
     unit_rate_information: dict | None,
     monthly_base_price_eur: float,
 ) -> TariffSettings | None:
@@ -610,7 +610,9 @@ def map_rate_structure_to_tariff_settings(
     heat_low_windows = (("02:00", "06:00"), ("12:00", "16:00"))
     heat_high_windows = (("18:00", "21:00"),)
 
-    if "HEAT" in agreement_code:
+    normalized_display_name = agreement_display_name.strip().lower()
+
+    if DISPLAY_NAME_OCTOPUS_HEAT in normalized_display_name:
         low_rate = next((rate for rate in rates if rate.windows == heat_low_windows), None)
         high_rate = next((rate for rate in rates if rate.windows == heat_high_windows), None)
         standard_candidates = [
@@ -641,7 +643,7 @@ def map_rate_structure_to_tariff_settings(
             )
         return None
 
-    if agreement_code == TARIFF_INTELLIGENT_GO_CODE:
+    if DISPLAY_NAME_OCTOPUS_GO in normalized_display_name and "lite" not in normalized_display_name:
         low_rate = next((rate for rate in rates if rate.windows == go_window), None)
         standard_candidates = [rate for rate in rates if rate is not low_rate]
         standard_prices = {rate.rate_ct for rate in standard_candidates}
@@ -700,7 +702,6 @@ query OverviewPage($accountNumber: String!) {
                     validTo
                     isActive
                     product {
-                        code
                         displayName
                     }
                 }
@@ -1059,15 +1060,14 @@ class OctopusGermanyClient:
                     if not agreement.get("isActive"):
                         continue
                     product = agreement.get("product") or {}
-                    code = product.get("code")
-                    if not code:
+                    display_name = product.get("displayName")
+                    if not display_name:
                         continue
                     return TariffAgreement(
-                        code=code,
+                        display_name=display_name,
                         valid_from=agreement.get("validFrom", ""),
                         valid_to=agreement.get("validTo"),
                         agreement_id=agreement.get("id"),
-                        display_name=product.get("displayName"),
                     )
 
         return None
@@ -1089,7 +1089,7 @@ class OctopusGermanyClient:
             return None
 
         return map_rate_structure_to_tariff_settings(
-            agreement.code,
+            agreement.display_name,
             agreement_data.get("unitRateInformation"),
             monthly_base_price_eur,
         )
