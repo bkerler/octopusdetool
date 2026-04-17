@@ -13,6 +13,7 @@ import os
 import platform
 import shutil
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -31,7 +32,46 @@ except ZoneInfoNotFoundError:
 EXCEL_TEMPLATE_FILENAME = "smartmeter_daten.xlsx"
 DEFAULT_TARIFF_GO_CT = 15.92
 DEFAULT_TARIFF_STANDARD_CT = 29.13
+DEFAULT_TARIFF_HEAT_LOW_CT = 21.50
+DEFAULT_TARIFF_HEAT_STANDARD_CT = 28.51
+DEFAULT_TARIFF_HEAT_HIGH_CT = 33.51
 DEFAULT_MONTHLY_BASE_PRICE_EUR = 15.94
+TARIFF_INTELLIGENT_GO = "Intelligent Go"
+TARIFF_INTELLIGENT_HEAT = "Intelligent Heat"
+TARIFF_INTELLIGENT_GO_LIGHT_CODE = "DEU-ELECTRICITY-IO-GO-LIGHT-24"
+TARIFF_INTELLIGENT_GO_CODE = "DEU-ELECTRICITY-IO-GO-24"
+
+
+@dataclass(slots=True)
+class TariffAgreement:
+    code: str
+    valid_from: str
+    valid_to: str | None
+
+
+@dataclass(slots=True)
+class TariffSettings:
+    tariff_type: str
+    low_ct: float
+    standard_ct: float
+    high_ct: float
+
+
+def get_default_tariff_settings_for_type(tariff_type: str) -> TariffSettings:
+    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+        return TariffSettings(
+            tariff_type=TARIFF_INTELLIGENT_HEAT,
+            low_ct=DEFAULT_TARIFF_HEAT_LOW_CT,
+            standard_ct=DEFAULT_TARIFF_HEAT_STANDARD_CT,
+            high_ct=DEFAULT_TARIFF_HEAT_HIGH_CT,
+        )
+
+    return TariffSettings(
+        tariff_type=TARIFF_INTELLIGENT_GO,
+        low_ct=DEFAULT_TARIFF_GO_CT,
+        standard_ct=DEFAULT_TARIFF_STANDARD_CT,
+        high_ct=0.0,
+    )
 
 
 def get_bundled_excel_template_path() -> Path:
@@ -97,6 +137,9 @@ def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, f
     defaults = {
         "tariff_go_ct": DEFAULT_TARIFF_GO_CT,
         "tariff_standard_ct": DEFAULT_TARIFF_STANDARD_CT,
+        "tariff_heat_low_ct": DEFAULT_TARIFF_HEAT_LOW_CT,
+        "tariff_heat_standard_ct": DEFAULT_TARIFF_HEAT_STANDARD_CT,
+        "tariff_heat_high_ct": DEFAULT_TARIFF_HEAT_HIGH_CT,
         "monthly_base_price_eur": DEFAULT_MONTHLY_BASE_PRICE_EUR,
     }
 
@@ -116,6 +159,9 @@ def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, f
         values = {
             "tariff_go_ct": ws["B3"].value,
             "tariff_standard_ct": ws["B4"].value,
+            "tariff_heat_low_ct": None,
+            "tariff_heat_standard_ct": None,
+            "tariff_heat_high_ct": None,
             "monthly_base_price_eur": ws["B7"].value,
         }
         wb.close()
@@ -136,10 +182,35 @@ def get_tariff_rate_ct(
     reading_start: datetime,
     tariff_go_ct: float = DEFAULT_TARIFF_GO_CT,
     tariff_standard_ct: float = DEFAULT_TARIFF_STANDARD_CT,
+    tariff_type: str = TARIFF_INTELLIGENT_GO,
+    tariff_high_ct: float = 0.0,
 ) -> float:
     """Return the tariff in ct/kWh for the given interval start."""
     normalized_start = normalize_datetime(reading_start)
-    return tariff_go_ct if 0 <= normalized_start.hour <= 4 else tariff_standard_ct
+    hour = normalized_start.hour
+
+    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+        if hour in {2, 3, 4, 5, 12, 13, 14, 15}:
+            return tariff_go_ct
+        if hour in {18, 19, 20}:
+            return tariff_high_ct
+        return tariff_standard_ct
+
+    return tariff_go_ct if 0 <= hour <= 4 else tariff_standard_ct
+
+
+def classify_tariff_zone(reading_start: datetime, tariff_type: str) -> str:
+    normalized_start = normalize_datetime(reading_start)
+    hour = normalized_start.hour
+
+    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+        if hour in {2, 3, 4, 5, 12, 13, 14, 15}:
+            return "low"
+        if hour in {18, 19, 20}:
+            return "high"
+        return "standard"
+
+    return "low" if 0 <= hour <= 4 else "standard"
 
 
 # German Octopus Energy API endpoints
@@ -171,7 +242,7 @@ query Viewer {
 
 # Meter discovery query
 ACCOUNT_DETAILS_QUERY = """
-query AccountDetails($accountNumber: String!) {
+query OverviewPage($accountNumber: String!) {
     account(accountNumber: $accountNumber) {
         id
         allProperties {
@@ -179,6 +250,14 @@ query AccountDetails($accountNumber: String!) {
             electricityMalos {
                 maloNumber
                 meter { id number shouldReceiveSmartMeterData }
+                agreements {
+                    validFrom
+                    validTo
+                    isActive
+                    product {
+                        code
+                    }
+                }
             }
         }
     }
@@ -415,6 +494,27 @@ class OctopusGermanyClient:
                         print(f"  - Soll Smart-Meter-Daten empfangen: {should_receive_smart}")
                         return (malo_number, meter_id, property_id)
         
+        return None
+
+    def get_active_tariff_agreement(self, account_number: str) -> TariffAgreement | None:
+        result = self._graphql_request(ACCOUNT_DETAILS_QUERY, {"accountNumber": account_number})
+        account_data = result.get("account", {})
+
+        for prop in account_data.get("allProperties", []):
+            for malo in prop.get("electricityMalos", []):
+                for agreement in malo.get("agreements", []) or []:
+                    if not agreement.get("isActive"):
+                        continue
+                    product = agreement.get("product") or {}
+                    code = product.get("code")
+                    if not code:
+                        continue
+                    return TariffAgreement(
+                        code=code,
+                        valid_from=agreement.get("validFrom", ""),
+                        valid_to=agreement.get("validTo"),
+                    )
+
         return None
 
     def get_consumption_graphql(self, property_id, period_from=None, period_to=None, fetch_all=False, progress_callback=None):

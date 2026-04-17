@@ -17,7 +17,7 @@
    </size>
   </property>
   <property name="windowTitle">
-   <string>Octopus Energy Germany - Smartmeter Datenexport V1.0.8</string>
+   <string>Octopus Energy Germany - Smartmeter Datenexport V1.0.9</string>
   </property>
   <property name="styleSheet">
 <string notr="true">QWidget {
@@ -482,7 +482,7 @@ QTableView#analysisTableView QHeaderView::section {
               <item>
                <widget class="QLabel" name="heroTitleLabel">
                 <property name="text">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:700; color:#ffffff;&quot;&gt;Octopus&lt;/span&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:300; color:#ffffff;&quot;&gt; Energy Deutschland Smartmeter Datenexport V1.0.8&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:700; color:#ffffff;&quot;&gt;Octopus&lt;/span&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:300; color:#ffffff;&quot;&gt; Energy Deutschland Smartmeter Datenexport V1.0.9&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
                 <property name="wordWrap">
                  <bool>true</bool>
@@ -876,33 +876,67 @@ QTableView#analysisTableView QHeaderView::section {
            <number>14</number>
           </property>
           <item row="0" column="0">
+           <widget class="QLabel" name="tariffTypeLabel">
+            <property name="text">
+             <string>Tariftyp</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QComboBox" name="tariffTypeComboBox"/>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="tariffCodeLabel">
+            <property name="text">
+             <string>Code:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QLineEdit" name="tariffCodeLineEdit">
+            <property name="readOnly">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
            <widget class="QLabel" name="tariffGoLabel">
             <property name="text">
              <string>Tarif Go 00:00-04:59 (ct/kWh)</string>
             </property>
            </widget>
           </item>
-          <item row="0" column="1">
+          <item row="2" column="1">
            <widget class="QLineEdit" name="tariffGoLineEdit"/>
           </item>
-          <item row="1" column="0">
+          <item row="3" column="0">
            <widget class="QLabel" name="tariffStandardLabel">
             <property name="text">
              <string>Tarif Standard 05:00-23:59 (ct/kWh)</string>
             </property>
            </widget>
           </item>
-          <item row="1" column="1">
+          <item row="3" column="1">
            <widget class="QLineEdit" name="tariffStandardLineEdit"/>
           </item>
-          <item row="2" column="0">
+          <item row="4" column="0">
+           <widget class="QLabel" name="tariffHighLabel">
+            <property name="text">
+             <string>Tarif Hoch 18:00-20:59 (ct/kWh)</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QLineEdit" name="tariffHighLineEdit"/>
+          </item>
+          <item row="5" column="0">
            <widget class="QLabel" name="basePriceLabel">
             <property name="text">
              <string>Grundpreis pro Monat (€)</string>
             </property>
            </widget>
           </item>
-          <item row="2" column="1">
+          <item row="5" column="1">
            <widget class="QLineEdit" name="basePriceLineEdit"/>
           </item>
          </layout>
