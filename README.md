@@ -40,7 +40,7 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 
 1. Ein Octopus Energy **Deutschland** Konto
 2. Ihre Octopus Energy Zugangsdaten (E-Mail und Passwort)
-
+3. Ein Octopus Intelligent Go oder Octopus Intelligent Heat Tarif (Light Tarife werden wegen fehlender Smartmeter-Übertragung nicht unterstützt)
 Die Kundennummer wird automatisch ermittelt. Bei mehreren Konten können Sie mit `--list-accounts` alle Konten anzeigen und mit `--account-number` eines auswählen.
 
 ## Installation
