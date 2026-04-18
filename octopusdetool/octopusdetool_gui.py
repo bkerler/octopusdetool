@@ -80,7 +80,9 @@ from octopusdetool.octopusdetool import (
     get_default_excel_path,
     get_default_tariff_settings_for_type,
     get_default_output_path,
+    get_app_config_folder,
     get_smartmeter_data_folder,
+    init_app_config_folder,
     load_excel_tariff_settings,
     normalize_datetime,
     save_to_json,
@@ -88,7 +90,8 @@ from octopusdetool.octopusdetool import (
 )
 
 
-CONFIG_FILE = get_smartmeter_data_folder() / "config.json"
+CONFIG_WRITABLE = True
+CONFIG_FILE = get_app_config_folder() / "config.json"
 CONFIG_ENCRYPTION_VERSION = 1
 CONFIG_ENCRYPTED_FIELDS = ("email", "password")
 CONFIG_AES_KEY = hashlib.sha256(b"octopusdetool_rocks!").digest()
@@ -463,6 +466,7 @@ class OctopusSmartMeterGUI:
         self.tariff_high_line_edit = self._find_widget(QLineEdit, "tariffHighLineEdit")
         self.base_price_line_edit = self._find_widget(QLineEdit, "basePriceLineEdit")
         self.save_settings_button = self._find_widget(QPushButton, "saveSettingsButton")
+        self.config_path_line_edit = self._find_widget(QLineEdit, "configPathLineEdit")
 
         self.view_mode_combo = self._find_widget(QComboBox, "viewModeComboBox")
         self.view_date_edit = self._find_widget(QDateEdit, "viewDateEdit")
@@ -586,6 +590,16 @@ QComboBox::drop-down {
     border: none;
     width: 28px;
     background: transparent;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+}
+
+QComboBox::down-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 6px solid #240748;
+    border-right: 6px solid #240748;
+    border-top: 8px solid #f4eeff;
 }
 
 QComboBox QAbstractItemView {
@@ -601,14 +615,19 @@ QListView {
     outline: 0;
     padding: 0;
     margin: 0;
+    show-decoration-selected: 1;
 }
 
 QListView::item {
-    background-color: #240748;
     color: #f4eeff;
+    background: transparent;
     border: none;
     padding: 10px 16px;
     margin: 0;
+}
+
+QListView::item:hover {
+    background-color: #3a1a6e;
 }
 
 QListView::item:selected {
@@ -622,7 +641,6 @@ QListView::item:selected {
             view.setStyleSheet(popup_stylesheet)
             view.setFrameShape(QFrame.Shape.NoFrame)
             view.setContentsMargins(0, 0, 0, 0)
-            view.viewport().setStyleSheet("background-color: #240748;")
             popup_window = view.window()
             popup_window.setStyleSheet("background-color: #240748; border: 1px solid #6f4df6;")
             popup_window.setContentsMargins(0, 0, 0, 0)
@@ -748,6 +766,7 @@ QListView::item:selected {
         self.view_mode_combo.setCurrentIndex(0)
         self.view_date_edit.setDate(QDate.currentDate())
         self.view_currency_checkbox.setChecked(False)
+        self.config_path_line_edit.setText(str(get_app_config_folder()))
         self._configure_view_date_edit()
         self._refresh_analysis_view()
 
@@ -800,7 +819,7 @@ QListView::item:selected {
         self._fit_window_to_content(recenter=True)
 
     def _get_debug_log_path(self) -> Path:
-        return get_smartmeter_data_folder() / "log.txt"
+        return get_app_config_folder() / "log.txt"
 
     def _content_height_for_window_width(self, window_width: int) -> int:
         content_layout = self.scroll_area_contents.layout()
@@ -902,12 +921,14 @@ QListView::item:selected {
             config[field] = value
             migrated = True
 
-        if migrated:
+        if migrated and CONFIG_WRITABLE:
             self._write_config(config)
 
         return config, migrated
 
     def _write_config(self, config: dict) -> None:
+        if not CONFIG_WRITABLE:
+            return
         config_to_save = dict(config)
         for field in CONFIG_ENCRYPTED_FIELDS:
             config_to_save[field] = self._encrypt_config_value(config.get(field, ""))
@@ -959,8 +980,8 @@ QListView::item:selected {
         return parsed_rates
 
     def _persist_requested_tariff_display_name(self, display_name: str) -> None:
-        get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
-
+        if not CONFIG_WRITABLE:
+            return
         if CONFIG_FILE.exists():
             try:
                 config, _migrated = self._read_config_with_migration()
@@ -976,8 +997,8 @@ QListView::item:selected {
         self._write_config(config)
 
     def _persist_manual_tariff_selection(self, tariff_type: str) -> None:
-        get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
-
+        if not CONFIG_WRITABLE:
+            return
         if CONFIG_FILE.exists():
             try:
                 config, _migrated = self._read_config_with_migration()
@@ -1004,7 +1025,10 @@ QListView::item:selected {
             return
 
         log_path = self._get_debug_log_path()
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         separator = "=" * 80
 
         with open(log_path, "a", encoding="utf-8") as log_file:
@@ -1802,8 +1826,6 @@ QListView::item:selected {
         )
 
     def load_config(self) -> None:
-        get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
-
         if not CONFIG_FILE.exists():
             self._has_saved_base_price = False
             self._refresh_analysis_view()
@@ -1968,6 +1990,8 @@ QListView::item:selected {
             self._set_status(f"Fehler beim Lesen der CSV: {exc}")
 
     def save_config(self, *, force: bool = False) -> None:
+        if not CONFIG_WRITABLE:
+            return
         if not force and not self.save_config_checkbox.isChecked():
             return
 
@@ -1980,9 +2004,6 @@ QListView::item:selected {
             monthly_base_price_eur = DEFAULT_MONTHLY_BASE_PRICE_EUR
         else:
             tariff_type, tariff_go_ct, tariff_standard_ct, tariff_high_ct, monthly_base_price_eur = tariff_values
-
-        get_smartmeter_data_folder().mkdir(parents=True, exist_ok=True)
-
         config = {
             "email": self.email_line_edit.text(),
             "password": self.password_line_edit.text(),
@@ -2136,7 +2157,10 @@ QListView::item:selected {
             _tariff_type, tariff_go_ct, tariff_standard_ct, _tariff_high_ct, monthly_base_price_eur = tariff_values
 
         data_dir = get_smartmeter_data_folder()
-        data_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            data_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         self.save_config()
         self._start_progress()
 
@@ -2182,69 +2206,66 @@ QListView::item:selected {
                     property_id = None
                     malo_number = None
 
-                    should_refresh_tariff_display_name = need_to_fetch or not self.current_tariff_display_name
+                    # Always authenticate and refresh tariff info when the user clicks the button.
+                    self._set_status("Authentifizierung...", update=True)
+                    client = OctopusGermanyClient(
+                        self.email_line_edit.text(),
+                        self.password_line_edit.text(),
+                        debug=self.debug_checkbox.isChecked(),
+                    )
 
-                    if need_to_fetch or should_refresh_tariff_display_name:
-                        self._set_status("Authentifizierung...", update=True)
-                        client = OctopusGermanyClient(
-                            self.email_line_edit.text(),
-                            self.password_line_edit.text(),
-                            debug=self.debug_checkbox.isChecked(),
+                    if not client.authenticate():
+                        if client.last_error_kind == "network":
+                            raise Exception(
+                                "Keine Internetverbindung erkannt oder Netzwerkfehler bei der Anmeldung. "
+                                "Bitte Verbindung pruefen und erneut versuchen."
+                            )
+                        if client.last_error_kind == "response":
+                            raise Exception(
+                                "Der Octopus-Server hat unerwartet geantwortet. "
+                                "Bitte spaeter erneut versuchen."
+                            )
+                        raise Exception(
+                            "Authentifizierung fehlgeschlagen! Ueberpruefen Sie Ihre E-Mail und Ihr Passwort."
                         )
 
-                        if not client.authenticate():
-                            if client.last_error_kind == "network":
-                                raise Exception(
-                                    "Keine Internetverbindung erkannt oder Netzwerkfehler bei der Anmeldung. "
-                                    "Bitte Verbindung pruefen und erneut versuchen."
-                                )
-                            if client.last_error_kind == "response":
-                                raise Exception(
-                                    "Der Octopus-Server hat unerwartet geantwortet. "
-                                    "Bitte spaeter erneut versuchen."
-                                )
+                    self._set_status("Kundennummer wird ermittelt...", update=True)
+                    accounts = client.get_accounts_from_viewer()
+
+                    if not accounts:
+                        if client.last_error_kind == "network":
                             raise Exception(
-                                "Authentifizierung fehlgeschlagen! Ueberpruefen Sie Ihre E-Mail und Ihr Passwort."
+                                "Keine Internetverbindung erkannt oder Netzwerkfehler beim Laden des Kontos. "
+                                "Bitte Verbindung pruefen und erneut versuchen."
                             )
+                        raise Exception("Kein Konto gefunden! Ueberpruefen Sie Ihre Zugangsdaten.")
 
-                        self._set_status("Kundennummer wird ermittelt...", update=True)
-                        accounts = client.get_accounts_from_viewer()
+                    if len(accounts) > 1:
+                        account_list = "\n".join(
+                            [f"  - {account.get('number', 'unknown')}" for account in accounts]
+                        )
+                        raise Exception(
+                            f"Mehrere Konten gefunden ({len(accounts)}). Bitte waehlen Sie ein Konto aus:\n{account_list}"
+                        )
 
-                        if not accounts:
-                            if client.last_error_kind == "network":
-                                raise Exception(
-                                    "Keine Internetverbindung erkannt oder Netzwerkfehler beim Laden des Kontos. "
-                                    "Bitte Verbindung pruefen und erneut versuchen."
-                                )
-                            raise Exception("Kein Konto gefunden! Ueberpruefen Sie Ihre Zugangsdaten.")
-
-                        if len(accounts) > 1:
-                            account_list = "\n".join(
-                                [f"  - {account.get('number', 'unknown')}" for account in accounts]
-                            )
-                            raise Exception(
-                                f"Mehrere Konten gefunden ({len(accounts)}). Bitte waehlen Sie ein Konto aus:\n{account_list}"
-                            )
-
-                        account_number = accounts[0].get("number")
-                        active_agreement = client.get_active_tariff_agreement(account_number)
-                        api_tariff_settings = None
-                        api_tariff_rates: list[TariffRate] = []
-                        if active_agreement is not None:
-                            api_tariff_rates = client.get_tariff_rates_for_agreement(active_agreement)
-                            api_tariff_settings = client.get_tariff_settings_for_agreement(
-                                active_agreement,
-                                monthly_base_price_eur,
-                            )
-                        self._apply_tariff_agreement(
+                    account_number = accounts[0].get("number")
+                    active_agreement = client.get_active_tariff_agreement(account_number)
+                    api_tariff_settings = None
+                    api_tariff_rates: list[TariffRate] = []
+                    if active_agreement is not None:
+                        api_tariff_rates = client.get_tariff_rates_for_agreement(active_agreement)
+                        api_tariff_settings = client.get_tariff_settings_for_agreement(
                             active_agreement,
-                            api_tariff_settings,
-                            api_tariff_rates,
                         )
-                        tariff_values = self._get_tariff_values(show_error=False)
-                        if tariff_values is None:
-                            raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
-                        _tariff_type, tariff_go_ct, tariff_standard_ct, _tariff_high_ct, monthly_base_price_eur = tariff_values
+                    self._apply_tariff_agreement(
+                        active_agreement,
+                        api_tariff_settings,
+                        api_tariff_rates,
+                    )
+                    tariff_values = self._get_tariff_values(show_error=False)
+                    if tariff_values is None:
+                        raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
+                    _tariff_type, tariff_go_ct, tariff_standard_ct, _tariff_high_ct, monthly_base_price_eur = tariff_values
 
                     if need_to_fetch:
                         self._set_status(
@@ -2374,8 +2395,10 @@ QListView::item:selected {
 
                     format_type = self.output_format_combo.currentText()
                     output_path = self._get_normalized_output_path().resolve()
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-
+                    try:
+                        output_path.parent.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        pass
                     self._set_status(
                         f"Speichere {len(unique_data)} Eintraege in consumption.csv...",
                         update=True,
@@ -2473,7 +2496,7 @@ QListView::item:selected {
                     self._set_default_analysis_date(force=True)
                     self._refresh_analysis_view()
                     self._set_status(
-                        f"Fertig! Daten in Documents/smartmeter_data/ ({len(unique_data)} Eintraege)"
+                        f"Fertig! Daten gespeichert ({len(unique_data)} Eintraege)"
                     )
                 except Exception:
                     if self.debug_checkbox.isChecked():
@@ -2499,7 +2522,19 @@ def main() -> None:
     if platform.system() == "Darwin":
         app.setStyle(QStyleFactory.create("Fusion"))
     app.setApplicationDisplayName("OctopusDETool")
-    ensure_smartmeter_data_folder()
+
+    # Initialize app config folder once at program start
+    ok, error = init_app_config_folder()
+    if not ok:
+        QMessageBox.warning(
+            None,
+            "Ordnerfehler",
+            f"Der Anwendungsordner konnte nicht erstellt werden.\n"
+            f"Einstellungen werden nicht gespeichert.\n\n{error}",
+        )
+    global CONFIG_WRITABLE
+    CONFIG_WRITABLE = ok
+
     gui = OctopusSmartMeterGUI(app, debug_enabled=args.debug)
     gui.show()
     app.exec()

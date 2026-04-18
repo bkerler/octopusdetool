@@ -135,6 +135,37 @@ def _get_bundled_excel_template_resource(tariff_type: str):
     )
 
 
+def get_app_data_folder() -> Path:
+    """Get the OS-specific application data/config folder."""
+    system = platform.system()
+
+    if system == "Windows":
+        # FOLDERID_RoamingAppData
+        app_data = _get_windows_known_folder(
+            "{3EB685DB-65F9-4CF6-A03A-E3EF65729F3D}"
+        )
+        if app_data:
+            return app_data
+        app_data = os.environ.get("APPDATA")
+        if app_data:
+            return Path(app_data)
+        userprofile = os.environ.get("USERPROFILE")
+        if userprofile:
+            return Path(userprofile) / "AppData" / "Roaming"
+        home = Path.home()
+        if home.name:
+            return home / "AppData" / "Roaming"
+        return Path.cwd()
+    elif system == "Darwin":
+        return Path.home() / "Library" / "Application Support"
+    else:
+        # Linux/Unix: prefer XDG_CONFIG_HOME, fallback to ~/.config
+        xdg_config = os.environ.get("XDG_CONFIG_HOME")
+        if xdg_config:
+            return Path(xdg_config)
+        return Path.home() / ".config"
+
+
 def get_documents_folder() -> Path:
     """Get the user's Documents folder path (cross-platform)."""
     system = platform.system()
@@ -207,6 +238,11 @@ def _get_windows_known_folder(folder_id: str) -> Path | None:
             ole32.CoTaskMemFree(path_ptr)
 
 
+def get_app_config_folder() -> Path:
+    """Get the application configuration folder path (OS-specific app data location)."""
+    return _get_preferred_directory_path(get_app_data_folder() / "octopusdetool")
+
+
 def get_smartmeter_data_folder() -> Path:
     """Get the smartmeter_data folder path (in Documents)."""
     return _get_preferred_directory_path(get_documents_folder() / "smartmeter_data")
@@ -215,8 +251,30 @@ def get_smartmeter_data_folder() -> Path:
 def ensure_smartmeter_data_folder() -> Path:
     """Create and return the smartmeter data directory used by the app."""
     folder = get_smartmeter_data_folder()
-    folder.mkdir(parents=True, exist_ok=True)
+    if not folder.exists():
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except Exception:
+            pass
     return folder
+
+
+def init_app_config_folder() -> tuple[bool, str | None]:
+    """Initialize the app config folder once at program start.
+
+    Returns:
+        Tuple of (success: bool, error_message: str | None)
+    """
+    folder = get_app_config_folder()
+    if folder.exists() and folder.is_dir():
+        return True, None
+    try:
+        os.makedirs(folder, exist_ok=True)
+        if folder.exists() and folder.is_dir():
+            return True, None
+        return False, f"Der Ordner konnte nicht erstellt werden: {folder}"
+    except Exception as exc:
+        return False, f"Der Ordner konnte nicht erstellt werden: {folder}\n{exc}"
 
 
 def _get_preferred_directory_path(path: Path) -> Path:
@@ -300,8 +358,10 @@ def create_heat_excel_template(source_path: Path, target_path: Path) -> Path:
 
     source_path = Path(source_path)
     target_path = Path(target_path)
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     workbook = openpyxl.load_workbook(source_path)
 
     ws_settings = workbook["Einstellungen"]
@@ -612,6 +672,78 @@ def _extract_tariff_rates(unit_rate_information: dict | None) -> list[TariffRate
         )
 
     return rates
+
+
+def _extract_monthly_base_price(agreement_data: dict) -> float | None:
+    """Extract monthly base price (Grundpreis) from standing charge data.
+
+    The API returns standing charge information which may be a single object
+    or a list of historical rates. We convert the daily rate to a monthly
+    amount by multiplying with the average number of days per month (365/12).
+    """
+    raw = agreement_data.get("standingChargeGrossRateInformation")
+    if raw is None:
+        return None
+
+    if isinstance(raw, dict):
+        entries = [raw]
+    elif isinstance(raw, list):
+        entries = raw
+    else:
+        return None
+
+    valid_entries = [
+        e for e in entries if isinstance(e, dict) and e.get("grossRate") is not None
+    ]
+    if not valid_entries:
+        return None
+
+    # Prefer entries without an end date (currently valid), then latest start date
+    valid_entries.sort(
+        key=lambda e: (bool(e.get("rateValidToDate")), e.get("date", "")),
+        reverse=True,
+    )
+    best_entry = valid_entries[0]
+
+    try:
+        daily_rate = float(best_entry["grossRate"])
+    except (TypeError, ValueError):
+        return None
+
+    if daily_rate <= 0:
+        return None
+
+    # The API may return the standing charge in different units depending on
+    # the market. We compute all three plausible monthly interpretations and
+    # pick the one that falls into a reasonable German residential base-price
+    # range (roughly 4-50 EUR/month).
+    as_monthly = daily_rate
+    as_euros_per_day = daily_rate * (365.0 / 12.0)
+    as_cents_per_day = daily_rate * (365.0 / 12.0) / 100.0
+
+    candidates = [
+        (as_monthly, "monthly"),
+        (as_euros_per_day, "euros/day"),
+        (as_cents_per_day, "cents/day"),
+    ]
+
+    # Prefer candidates in the reasonable range [4, 50]
+    reasonable = [(v, u) for v, u in candidates if 4.0 <= v <= 50.0]
+    if reasonable:
+        # Pick the one closest to a typical base price of 15 EUR/month
+        best_value, best_unit = min(reasonable, key=lambda x: abs(x[0] - 15.0))
+        print(f"[DEBUG] Extracted standing charge: raw={daily_rate}, unit={best_unit}, monthly={round(best_value, 2)}")
+        return round(best_value, 2)
+
+    # Fallback: choose the candidate closest to the reasonable range
+    def _distance(v: float) -> float:
+        if v < 4.0:
+            return 4.0 - v
+        return v - 50.0
+
+    best_value, best_unit = min(candidates, key=lambda x: _distance(x[0]))
+    print(f"[DEBUG] Extracted standing charge: raw={daily_rate}, unit={best_unit}, monthly={round(best_value, 2)}")
+    return round(best_value, 2)
 
 
 def map_rate_structure_to_tariff_settings(
@@ -1093,7 +1225,6 @@ class OctopusGermanyClient:
     def get_tariff_settings_for_agreement(
         self,
         agreement: TariffAgreement,
-        monthly_base_price_eur: float,
     ) -> TariffSettings | None:
         if not agreement.agreement_id:
             return None
@@ -1105,6 +1236,18 @@ class OctopusGermanyClient:
         agreement_data = result.get("agreement", {})
         if not agreement_data:
             return None
+
+        monthly_base_price_eur = _extract_monthly_base_price(agreement_data)
+        if monthly_base_price_eur is None:
+            print("[WARN] Konnte Grundpreis nicht aus API extrahieren, verwende Standardwert.")
+            defaults = get_default_tariff_settings_for_type(
+                TARIFF_INTELLIGENT_HEAT
+                if DISPLAY_NAME_OCTOPUS_HEAT in agreement.display_name.strip().lower()
+                else TARIFF_INTELLIGENT_GO
+            )
+            monthly_base_price_eur = defaults.monthly_base_price_eur
+        else:
+            print(f"[INFO] Grundpreis aus API: {monthly_base_price_eur} EUR/Monat")
 
         return map_rate_structure_to_tariff_settings(
             agreement.display_name,
@@ -1454,9 +1597,10 @@ def fill_excel_template(
         output_path_obj = Path(output_path)
         workbook_tariff_type = requested_tariff_type
         bundled_template = get_bundled_excel_template_path(requested_tariff_type)
-
-        output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-
+        try:
+            output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
         if template_path_obj.exists():
             workbook_tariff_type = detect_excel_template_type(template_path_obj)
             if tariff_type and workbook_tariff_type != tariff_type:
@@ -1466,9 +1610,12 @@ def fill_excel_template(
                 )
                 return False
         elif bundled_template.exists():
-            template_path_obj.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(bundled_template, template_path_obj)
-            print(f"Excel-Vorlage aus dem Paket kopiert nach: {template_path_obj}")
+            try:
+                template_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(bundled_template, template_path_obj)
+                print(f"Excel-Vorlage aus dem Paket kopiert nach: {template_path_obj}")
+            except OSError:
+                pass
         elif requested_tariff_type == TARIFF_INTELLIGENT_HEAT:
             stock_template = get_bundled_excel_template_path(TARIFF_INTELLIGENT_GO)
             if stock_template.exists():
@@ -1849,6 +1996,12 @@ def main():
             print("  Keine Konten gefunden.")
         sys.exit(0)
     
+    # Initialize app config folder once at startup
+    config_ok, config_error = init_app_config_folder()
+    if not config_ok:
+        print(f"Warnung: {config_error}")
+        print("Einstellungen werden nicht gespeichert.")
+
     # Ensure the app data directory and Excel template exist before continuing.
     ensure_smartmeter_data_folder()
     ensure_excel_template()
@@ -1869,8 +2022,10 @@ def main():
     output_path = Path(args.output)
     
     # Create output directory if it doesn't exist
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
     existing_data, latest_interval_end = read_existing_csv(output_path)
     
     # Determine date range for fetching new data

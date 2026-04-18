@@ -17,7 +17,7 @@
    </size>
   </property>
   <property name="windowTitle">
-   <string>Octopus Energy Germany - Smartmeter Datenexport V1.1.2</string>
+   <string>Octopus Energy Germany - Smartmeter Datenexport V1.1.3</string>
   </property>
   <property name="styleSheet">
 <string notr="true">QWidget {
@@ -482,7 +482,7 @@ QTableView#analysisTableView QHeaderView::section {
               <item>
                <widget class="QLabel" name="heroTitleLabel">
                 <property name="text">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:700; color:#ffffff;&quot;&gt;Octopus&lt;/span&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:300; color:#ffffff;&quot;&gt; Energy Deutschland Smartmeter Datenexport V1.1.2&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:700; color:#ffffff;&quot;&gt;Octopus&lt;/span&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:300; color:#ffffff;&quot;&gt; Energy Deutschland Smartmeter Datenexport V1.1.3&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
                 <property name="wordWrap">
                  <bool>true</bool>
@@ -565,7 +565,7 @@ QTableView#analysisTableView QHeaderView::section {
               <item row="3" column="0" colspan="3">
                <widget class="QCheckBox" name="debugCheckBox">
                 <property name="text">
-                 <string>Debug-Ausgabe in Dokumente/smartmeter_data/log.txt speichern</string>
+                 <string>Debug-Ausgabe in Anwendungsordner/log.txt speichern</string>
                 </property>
                </widget>
               </item>
@@ -961,6 +961,24 @@ QTableView#analysisTableView QHeaderView::section {
           <widget class="QPushButton" name="saveSettingsButton">
            <property name="text">
             <string>Einstellungen speichern</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="configPathLayout">
+         <item>
+          <widget class="QLabel" name="configPathLabel">
+           <property name="text">
+            <string>Konfigurationspfad:</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="configPathLineEdit">
+           <property name="readOnly">
+            <bool>true</bool>
            </property>
           </widget>
          </item>
