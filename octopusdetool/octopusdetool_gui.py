@@ -248,6 +248,29 @@ class _TeeStream:
             stream.flush()
 
 
+def _configure_macos_qt_theme(app: QApplication) -> None:
+    fusion_style = QStyleFactory.create("Fusion")
+    if fusion_style is not None:
+        app.setStyle(fusion_style)
+
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor("#16042c"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#f4eeff"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#240748"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#2e1160"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#240748"))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#f4eeff"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#6f4df6"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#6f4df6"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.Link, QColor("#8d71ff"))
+    palette.setColor(QPalette.ColorRole.LinkVisited, QColor("#cbbcff"))
+    app.setPalette(palette)
+
+
 def _pixmap_from_base64(encoded_png: str) -> QPixmap:
     pixmap = _EMBEDDED_PIXMAP_CACHE.get(encoded_png)
     if pixmap is None:
@@ -2682,7 +2705,7 @@ def main() -> None:
 
     app = QApplication.instance() or QApplication([sys.argv[0], *qt_args])
     if platform.system() == "Darwin":
-        app.setStyle(QStyleFactory.create("Fusion"))
+        _configure_macos_qt_theme(app)
     app.setApplicationDisplayName("OctopusDETool")
 
     # Initialize app config folder once at program start
