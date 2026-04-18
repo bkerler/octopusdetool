@@ -269,6 +269,120 @@ def _configure_macos_qt_theme(app: QApplication) -> None:
     app.setPalette(palette)
 
 
+def _build_combo_stylesheet(background_color: str) -> str:
+    return f"""
+QComboBox {{
+    background-color: {background_color};
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 8px 34px 8px 10px;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}}
+
+QComboBox::drop-down {{
+    border: none;
+    width: 28px;
+    background-color: {background_color};
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}}
+
+QComboBox::down-arrow {{
+    width: 0px;
+    height: 0px;
+    border-left: 6px solid {background_color};
+    border-right: 6px solid {background_color};
+    border-top: 8px solid #f4eeff;
+}}
+
+QComboBox QAbstractItemView {{
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}}
+"""
+
+
+def _build_popup_list_stylesheet(background_color: str) -> str:
+    return f"""
+QListView {{
+    background-color: {background_color};
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    outline: 0;
+    padding: 0;
+    margin: 0;
+    show-decoration-selected: 1;
+}}
+
+QListView::item {{
+    color: #f4eeff;
+    background: transparent;
+    border: none;
+    padding: 10px 16px;
+    margin: 0;
+}}
+
+QListView::item:hover {{
+    background-color: #4a2388;
+}}
+
+QListView::item:selected {{
+    background-color: #6f4df6;
+    color: #ffffff;
+}}
+"""
+
+
+def _build_line_edit_stylesheet(background_color: str) -> str:
+    return f"""
+QLineEdit {{
+    background-color: {background_color};
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 8px 10px;
+    color: #f4eeff;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}}
+
+QLineEdit:focus {{
+    border: 1px solid #b79dff;
+}}
+"""
+
+
+def _build_primary_button_stylesheet() -> str:
+    return """
+QPushButton {
+    background-color: #6f4df6;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 9px 16px;
+    color: #ffffff;
+}
+
+QPushButton:hover {
+    background-color: #8d71ff;
+    border-color: #8d71ff;
+}
+
+QPushButton:pressed {
+    background-color: #5537cf;
+    border-color: #5537cf;
+}
+
+QPushButton:disabled {
+    background-color: #4d369f;
+    border-color: #4d369f;
+    color: #d8ccff;
+}
+"""
+
+
 def _pixmap_from_base64(encoded_png: str) -> QPixmap:
     pixmap = _EMBEDDED_PIXMAP_CACHE.get(encoded_png)
     if pixmap is None:
@@ -621,68 +735,8 @@ class OctopusSmartMeterGUI:
         self.view_calendar_popup.calendar.clicked.connect(self._on_view_calendar_date_selected)
 
     def _apply_popup_styling(self) -> None:
-        combo_stylesheet = """
-QComboBox {
-    background-color: #240748;
-    color: #f4eeff;
-    border: 1px solid #6f4df6;
-    border-radius: 10px;
-    padding: 8px 34px 8px 10px;
-    selection-background-color: #6f4df6;
-    selection-color: #ffffff;
-}
-
-QComboBox::drop-down {
-    border: none;
-    width: 28px;
-    background-color: #240748;
-    subcontrol-origin: padding;
-    subcontrol-position: center right;
-    border-top-right-radius: 10px;
-    border-bottom-right-radius: 10px;
-}
-
-QComboBox::down-arrow {
-    width: 0px;
-    height: 0px;
-    border-left: 6px solid #240748;
-    border-right: 6px solid #240748;
-    border-top: 8px solid #f4eeff;
-}
-
-QComboBox QAbstractItemView {
-    selection-background-color: #6f4df6;
-    selection-color: #ffffff;
-}
-"""
-        popup_stylesheet = """
-QListView {
-    background-color: #240748;
-    color: #f4eeff;
-    border: 1px solid #6f4df6;
-    outline: 0;
-    padding: 0;
-    margin: 0;
-    show-decoration-selected: 1;
-}
-
-QListView::item {
-    color: #f4eeff;
-    background: transparent;
-    border: none;
-    padding: 10px 16px;
-    margin: 0;
-}
-
-QListView::item:hover {
-    background-color: #4a2388;
-}
-
-QListView::item:selected {
-    background-color: #6f4df6;
-    color: #ffffff;
-}
-"""
+        combo_stylesheet = _build_combo_stylesheet("#240748")
+        popup_stylesheet = _build_popup_list_stylesheet("#240748")
         for combo in (self.view_mode_combo, self.output_format_combo, self.tariff_type_combo):
             combo.setStyleSheet(combo_stylesheet)
             view = combo.view()
@@ -693,36 +747,7 @@ QListView::item:selected {
             popup_window.setStyleSheet("background-color: #240748; border: 1px solid #6f4df6;")
             popup_window.setContentsMargins(0, 0, 0, 0)
 
-        abruf_combo_stylesheet = """
-QComboBox {
-    background-color: #1c0638;
-    color: #f4eeff;
-    border: 1px solid #6f4df6;
-    border-radius: 10px;
-    padding: 8px 34px 8px 10px;
-    selection-background-color: #6f4df6;
-    selection-color: #ffffff;
-}
-
-QComboBox::drop-down {
-    border: none;
-    width: 28px;
-    background-color: #1c0638;
-    subcontrol-origin: padding;
-    subcontrol-position: center right;
-    border-top-right-radius: 10px;
-    border-bottom-right-radius: 10px;
-}
-
-QComboBox::down-arrow {
-    width: 0px;
-    height: 0px;
-    border-left: 6px solid #1c0638;
-    border-right: 6px solid #1c0638;
-    border-top: 8px solid #f4eeff;
-}
-"""
-        self.output_format_combo.setStyleSheet(abruf_combo_stylesheet)
+        self.output_format_combo.setStyleSheet(_build_combo_stylesheet("#1c0638"))
 
     def _configure_range_date_edits(self) -> None:
         icon_path = self._ensure_embedded_calendar_pick_icon_file().as_posix()
@@ -762,21 +787,7 @@ QDateEdit::down-arrow {{
         return icon_path
 
     def _configure_settings_fields(self) -> None:
-        line_edit_stylesheet = """
-QLineEdit {
-    background-color: #240748;
-    border: 1px solid #6f4df6;
-    border-radius: 10px;
-    padding: 8px 10px;
-    color: #f4eeff;
-    selection-background-color: #6f4df6;
-    selection-color: #ffffff;
-}
-
-QLineEdit:focus {
-    border: 1px solid #b79dff;
-}
-"""
+        line_edit_stylesheet = _build_line_edit_stylesheet("#240748")
         for line_edit in (
             self.tariff_go_line_edit,
             self.tariff_standard_line_edit,
@@ -786,63 +797,10 @@ QLineEdit:focus {
         ):
             line_edit.setStyleSheet(line_edit_stylesheet)
 
-        settings_combo_stylesheet = """
-QComboBox {
-    background-color: #240748;
-    color: #f4eeff;
-    border: 1px solid #6f4df6;
-    border-radius: 10px;
-    padding: 8px 34px 8px 10px;
-    selection-background-color: #6f4df6;
-    selection-color: #ffffff;
-}
-
-QComboBox::drop-down {
-    border: none;
-    width: 28px;
-    background-color: #240748;
-    subcontrol-origin: padding;
-    subcontrol-position: center right;
-    border-top-right-radius: 10px;
-    border-bottom-right-radius: 10px;
-}
-
-QComboBox::down-arrow {
-    width: 0px;
-    height: 0px;
-    border-left: 6px solid #240748;
-    border-right: 6px solid #240748;
-    border-top: 8px solid #f4eeff;
-}
-"""
-        self.tariff_type_combo.setStyleSheet(settings_combo_stylesheet)
+        self.tariff_type_combo.setStyleSheet(_build_combo_stylesheet("#240748"))
 
     def _configure_primary_buttons(self) -> None:
-        primary_button_stylesheet = """
-QPushButton {
-    background-color: #6f4df6;
-    border: 1px solid #6f4df6;
-    border-radius: 10px;
-    padding: 9px 16px;
-    color: #ffffff;
-}
-
-QPushButton:hover {
-    background-color: #8d71ff;
-    border-color: #8d71ff;
-}
-
-QPushButton:pressed {
-    background-color: #5537cf;
-    border-color: #5537cf;
-}
-
-QPushButton:disabled {
-    background-color: #4d369f;
-    border-color: #4d369f;
-    color: #d8ccff;
-}
-"""
+        primary_button_stylesheet = _build_primary_button_stylesheet()
         for button in (self.fetch_data_button, self.save_settings_button):
             button.setStyleSheet(primary_button_stylesheet)
 
