@@ -8,14 +8,17 @@ and outputs to CSV format. Can also fill German electricity tariff Excel templat
 
 import argparse
 import csv
+import ctypes
+import importlib.resources as package_resources
 import json
 import os
 import platform
 import shutil
 import sys
+import uuid
 from copy import copy
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfoNotFoundError
@@ -41,18 +44,36 @@ DEFAULT_MONTHLY_BASE_PRICE_EUR = 15.94
 DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR = 14.50
 TARIFF_INTELLIGENT_GO = "Intelligent Go"
 TARIFF_INTELLIGENT_HEAT = "Intelligent Heat"
-TARIFF_DYNAMIC_CODE = "DEU-ELECTRICITY-DYNAMIC-OCTOPUS-12"
-TARIFF_INTELLIGENT_HEAT_CODE = "DEU-ELECTRICITY-HEAT-24"
-TARIFF_INTELLIGENT_HEAT_LIGHT_CODE = "DEU-ELECTRICITY-HEAT-LIGHT-24"
-TARIFF_INTELLIGENT_GO_LIGHT_CODE = "DEU-ELECTRICITY-IO-GO-LIGHT-24"
-TARIFF_INTELLIGENT_GO_CODE = "DEU-ELECTRICITY-IO-GO-24"
+DISPLAY_NAME_OCTOPUS_GO = "octopus go"
+DISPLAY_NAME_OCTOPUS_HEAT = "octopus heat"
+DISPLAY_NAME_DYNAMIC_OCTOPUS = "dynamicoctopus"
 
+
+class _WindowsGuid(ctypes.Structure):
+    _fields_ = [
+        ("Data1", ctypes.c_ulong),
+        ("Data2", ctypes.c_ushort),
+        ("Data3", ctypes.c_ushort),
+        ("Data4", ctypes.c_ubyte * 8),
+    ]
+
+    @classmethod
+    def from_string(cls, value: str) -> "_WindowsGuid":
+        parsed = uuid.UUID(value.strip("{}"))
+        data4 = (ctypes.c_ubyte * 8)(*parsed.bytes[8:])
+        return cls(
+            parsed.time_low,
+            parsed.time_mid,
+            parsed.time_hi_version,
+            data4,
+        )
 
 @dataclass(slots=True)
 class TariffAgreement:
-    code: str
+    display_name: str
     valid_from: str
     valid_to: str | None
+    agreement_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -62,6 +83,13 @@ class TariffSettings:
     standard_ct: float
     high_ct: float
     monthly_base_price_eur: float
+
+
+@dataclass(slots=True)
+class TariffRate:
+    name: str
+    rate_ct: float
+    windows: tuple[tuple[str, str], ...]
 
 
 def get_default_tariff_settings_for_type(tariff_type: str) -> TariffSettings:
@@ -93,13 +121,28 @@ def get_bundled_excel_template_path(tariff_type: str = TARIFF_INTELLIGENT_GO) ->
     return Path(__file__).parent / filename
 
 
+def _get_bundled_excel_template_filename(tariff_type: str) -> str:
+    return (
+        HEAT_EXCEL_TEMPLATE_FILENAME
+        if tariff_type == TARIFF_INTELLIGENT_HEAT
+        else EXCEL_TEMPLATE_FILENAME
+    )
+
+
+def _get_bundled_excel_template_resource(tariff_type: str):
+    return package_resources.files("octopusdetool").joinpath(
+        _get_bundled_excel_template_filename(tariff_type)
+    )
+
+
 def get_documents_folder() -> Path:
     """Get the user's Documents folder path (cross-platform)."""
     system = platform.system()
-    
+
     if system == "Windows":
-        # Windows: use %USERPROFILE%\Documents
-        docs = Path.home() / "Documents"
+        # Prefer the Windows "Documents" known folder because Path.home()
+        # can point to a stale or virtualized profile in packaged apps.
+        docs = _get_windows_documents_folder()
     elif system == "Darwin":
         # macOS: ~/Documents
         docs = Path.home() / "Documents"
@@ -110,13 +153,88 @@ def get_documents_folder() -> Path:
             docs = Path(xdg_docs)
         else:
             docs = Path.home() / "Documents"
-    
+
     return docs
+
+
+def _get_windows_documents_folder() -> Path:
+    """Resolve the current user's Documents folder on Windows."""
+    known_folder = _get_windows_known_folder(
+        "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}"
+    )
+    if known_folder:
+        return known_folder
+
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        return Path(userprofile) / "Documents"
+
+    homedrive = os.environ.get("HOMEDRIVE")
+    homepath = os.environ.get("HOMEPATH")
+    if homedrive and homepath:
+        return Path(f"{homedrive}{homepath}") / "Documents"
+
+    home = Path.home()
+    if home.name:
+        return home / "Documents"
+
+    # Final fallback keeps the app writable even if Windows profile discovery fails.
+    return Path.cwd() / "Documents"
+
+
+def _get_windows_known_folder(folder_id: str) -> Path | None:
+    """Return a Windows known folder path, or None if it cannot be resolved."""
+    path_ptr = ctypes.c_wchar_p()
+    shell32 = getattr(ctypes.windll, "shell32", None)
+    ole32 = getattr(ctypes.windll, "ole32", None)
+    if shell32 is None or ole32 is None:
+        return None
+
+    try:
+        result = shell32.SHGetKnownFolderPath(
+            ctypes.byref(_WindowsGuid.from_string(folder_id)),
+            0,
+            None,
+            ctypes.byref(path_ptr),
+        )
+        if result != 0 or not path_ptr.value:
+            return None
+        return Path(path_ptr.value)
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    finally:
+        if path_ptr:
+            ole32.CoTaskMemFree(path_ptr)
 
 
 def get_smartmeter_data_folder() -> Path:
     """Get the smartmeter_data folder path (in Documents)."""
-    return get_documents_folder() / "smartmeter_data"
+    return _get_preferred_directory_path(get_documents_folder() / "smartmeter_data")
+
+
+def ensure_smartmeter_data_folder() -> Path:
+    """Create and return the smartmeter data directory used by the app."""
+    folder = get_smartmeter_data_folder()
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def _get_preferred_directory_path(path: Path) -> Path:
+    """Return a usable directory path, even if the preferred path is a file."""
+    if not path.exists() or path.is_dir():
+        return path
+
+    for suffix in ("_dir", "_folder", "_data"):
+        candidate = path.with_name(f"{path.name}{suffix}")
+        if not candidate.exists() or candidate.is_dir():
+            return candidate
+
+    index = 1
+    while True:
+        candidate = path.with_name(f"{path.name}_{index}")
+        if not candidate.exists() or candidate.is_dir():
+            return candidate
+        index += 1
 
 
 def _copy_cell_style(source_cell, target_cell) -> None:
@@ -310,23 +428,48 @@ def create_heat_excel_template(source_path: Path, target_path: Path) -> Path:
 
 def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
     """Copy the requested Excel template to smartmeter_data if it doesn't exist."""
-    smartmeter_folder = get_smartmeter_data_folder()
-    smartmeter_folder.mkdir(parents=True, exist_ok=True)
+    smartmeter_folder = ensure_smartmeter_data_folder()
 
-    source = get_bundled_excel_template_path(tariff_type)
-    target = smartmeter_folder / source.name
+    source_name = _get_bundled_excel_template_filename(tariff_type)
+    target = smartmeter_folder / source_name
 
     if not target.exists():
-        if source.exists():
-            shutil.copy2(source, target)
-            print(f"Excel-Vorlage kopiert nach: {target}")
+        resource = _get_bundled_excel_template_resource(tariff_type)
+        if resource.is_file():
+            try:
+                with package_resources.as_file(resource) as source_path:
+                    shutil.copy2(source_path, target)
+                print(f"Excel-Vorlage kopiert nach: {target}")
+            except OSError:
+                pass
         elif tariff_type == TARIFF_INTELLIGENT_HEAT:
-            stock_source = get_bundled_excel_template_path(TARIFF_INTELLIGENT_GO)
-            if stock_source.exists():
-                create_heat_excel_template(stock_source, target)
-                print(f"Heat-Excel-Vorlage erzeugt nach: {target}")
+            stock_resource = _get_bundled_excel_template_resource(TARIFF_INTELLIGENT_GO)
+            if stock_resource.is_file():
+                try:
+                    with package_resources.as_file(stock_resource) as stock_source_path:
+                        create_heat_excel_template(stock_source_path, target)
+                    print(f"Heat-Excel-Vorlage erzeugt nach: {target}")
+                except OSError:
+                    pass
 
-    return target if target.exists() else source
+    if target.exists():
+        return target
+
+    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+        stock_template = get_bundled_excel_template_path(TARIFF_INTELLIGENT_GO)
+        if stock_template.exists():
+            try:
+                create_heat_excel_template(stock_template, target)
+                print(f"Heat-Excel-Vorlage erzeugt nach: {target}")
+                return target
+            except OSError:
+                pass
+
+    source = get_bundled_excel_template_path(tariff_type)
+    if source.exists():
+        return source
+
+    return target
 
 
 def get_default_output_path() -> Path:
@@ -433,6 +576,107 @@ def classify_tariff_zone(reading_start: datetime, tariff_type: str) -> str:
     return "low" if 0 <= hour <= 4 else "standard"
 
 
+def _normalize_rate_windows(windows: list[dict] | None) -> tuple[tuple[str, str], ...]:
+    normalized: list[tuple[str, str]] = []
+    for window in windows or []:
+        active_from = window.get("activeFromTime")
+        active_to = window.get("activeToTime")
+        if not active_from or not active_to:
+            continue
+        normalized.append((str(active_from)[:5], str(active_to)[:5]))
+    normalized.sort()
+    return tuple(normalized)
+
+
+def _extract_tariff_rates(unit_rate_information: dict | None) -> list[TariffRate]:
+    if not isinstance(unit_rate_information, dict):
+        return []
+
+    typename = unit_rate_information.get("__typename")
+    if typename != "TimeOfUseProductUnitRateInformation":
+        return []
+
+    rates: list[TariffRate] = []
+    for rate in unit_rate_information.get("rates", []) or []:
+        try:
+            rate_ct = float(rate["latestGrossUnitRateCentsPerKwh"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        rates.append(
+            TariffRate(
+                name=rate.get("timeslotName") or "",
+                rate_ct=rate_ct,
+                windows=_normalize_rate_windows(rate.get("timeslotActivationRules")),
+            )
+        )
+
+    return rates
+
+
+def map_rate_structure_to_tariff_settings(
+    agreement_display_name: str,
+    unit_rate_information: dict | None,
+    monthly_base_price_eur: float,
+) -> TariffSettings | None:
+    """Map API time-of-use rates to the existing 2-zone/3-zone Excel tariff model."""
+    rates = _extract_tariff_rates(unit_rate_information)
+    if not rates:
+        return None
+
+    go_window = (("00:00", "05:00"),)
+    heat_low_windows = (("02:00", "06:00"), ("12:00", "16:00"))
+    heat_high_windows = (("18:00", "21:00"),)
+
+    normalized_display_name = agreement_display_name.strip().lower()
+
+    if DISPLAY_NAME_OCTOPUS_HEAT in normalized_display_name:
+        low_rate = next((rate for rate in rates if rate.windows == heat_low_windows), None)
+        high_rate = next((rate for rate in rates if rate.windows == heat_high_windows), None)
+        standard_candidates = [
+            rate for rate in rates if rate is not low_rate and rate is not high_rate
+        ]
+        if low_rate and high_rate and len(standard_candidates) == 1:
+            return TariffSettings(
+                tariff_type=TARIFF_INTELLIGENT_HEAT,
+                low_ct=low_rate.rate_ct,
+                standard_ct=standard_candidates[0].rate_ct,
+                high_ct=high_rate.rate_ct,
+                monthly_base_price_eur=monthly_base_price_eur,
+            )
+
+        # Relaxed compatibility for Heat: if the live tariff exposes exactly
+        # three distinct price levels, keep Excel export enabled even when the
+        # provider's time windows do not exactly match the bundled workbook's
+        # fixed labels. We map the lowest/middle/highest rate to the workbook's
+        # low/standard/high price fields.
+        unique_prices = sorted({rate.rate_ct for rate in rates})
+        if len(unique_prices) == 3:
+            return TariffSettings(
+                tariff_type=TARIFF_INTELLIGENT_HEAT,
+                low_ct=unique_prices[0],
+                standard_ct=unique_prices[1],
+                high_ct=unique_prices[2],
+                monthly_base_price_eur=monthly_base_price_eur,
+            )
+        return None
+
+    if DISPLAY_NAME_OCTOPUS_GO in normalized_display_name and "lite" not in normalized_display_name:
+        low_rate = next((rate for rate in rates if rate.windows == go_window), None)
+        standard_candidates = [rate for rate in rates if rate is not low_rate]
+        standard_prices = {rate.rate_ct for rate in standard_candidates}
+        if low_rate and standard_candidates and len(standard_prices) == 1:
+            return TariffSettings(
+                tariff_type=TARIFF_INTELLIGENT_GO,
+                low_ct=low_rate.rate_ct,
+                standard_ct=standard_candidates[0].rate_ct,
+                high_ct=0.0,
+                monthly_base_price_eur=monthly_base_price_eur,
+            )
+
+    return None
+
+
 # German Octopus Energy API endpoints
 GRAPHQL_URL = "https://api.oeg-kraken.energy/v1/graphql/"
 
@@ -471,11 +715,44 @@ query OverviewPage($accountNumber: String!) {
                 maloNumber
                 meter { id number shouldReceiveSmartMeterData }
                 agreements {
+                    id
                     validFrom
                     validTo
                     isActive
                     product {
-                        code
+                        displayName
+                    }
+                }
+            }
+        }
+    }
+}
+"""
+
+RATE_STRUCTURE_QUERY = """
+query GetRateStructureForProductAgreement($agreementId: ID!) {
+    agreement(id: $agreementId) {
+        standingChargeGrossRateInformation {
+            grossRate
+            date
+            rateValidToDate
+            vatRate
+        }
+        unitRateInformation {
+            __typename
+            ... on UnitRateInformation {
+                __typename
+                ... on SimpleProductUnitRateInformation {
+                    latestGrossUnitRateCentsPerKwh
+                }
+                ... on TimeOfUseProductUnitRateInformation {
+                    rates {
+                        timeslotName
+                        latestGrossUnitRateCentsPerKwh
+                        timeslotActivationRules {
+                            activeFromTime
+                            activeToTime
+                        }
                     }
                 }
             }
@@ -548,6 +825,58 @@ query getAccountMeasurements(
 }
 """
 
+SMART_USAGE_QUERY = """
+query GetSmartUsage(
+    $propertyId: ID!
+    $timezone: String!
+    $startAt: DateTime!
+    $endAt: DateTime!
+    $utilityFilters: [UtilityFiltersInput!]!
+) {
+    property(id: $propertyId) {
+        measurements(
+            first: 1000
+            timezone: $timezone
+            startAt: $startAt
+            endAt: $endAt
+            utilityFilters: $utilityFilters
+        ) {
+            edges {
+                node {
+                    value
+                    unit
+                    source
+                    ... on IntervalMeasurementType {
+                        startAt
+                        endAt
+                    }
+                    metaData {
+                        utilityFilters {
+                            ... on ElectricityFiltersOutput {
+                                readingDirection
+                            }
+                        }
+                        statistics {
+                            label
+                            value
+                            type
+                            costInclTax {
+                                costCurrency
+                                estimatedAmount
+                            }
+                            costExclTax {
+                                costCurrency
+                                estimatedAmount
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+"""
+
 
 class OctopusGermanyClient:
     """Client for Octopus Energy Germany GraphQL API."""
@@ -557,14 +886,25 @@ class OctopusGermanyClient:
         self.password = password
         self.token = None
         self.debug = debug
+        self.last_error_kind: str | None = None
+        self.last_error_message: str | None = None
 
     def _log_debug(self, message: str):
         """Print debug message if debug mode is enabled."""
         if self.debug:
             print(f"[DEBUG] {message}")
 
+    def _clear_last_error(self) -> None:
+        self.last_error_kind = None
+        self.last_error_message = None
+
+    def _set_last_error(self, kind: str, message: str) -> None:
+        self.last_error_kind = kind
+        self.last_error_message = message
+
     def authenticate(self) -> bool:
         """Authenticate and get JWT token."""
+        self._clear_last_error()
         variables = {
             "email": self.email,
             "password": self.password
@@ -601,18 +941,25 @@ class OctopusGermanyClient:
             data = response.json()
             
             if "errors" in data:
-                print(f"Authentifizierungsfehler: {data['errors']}")
+                error_message = f"Authentifizierungsfehler: {data['errors']}"
+                self._set_last_error("auth", error_message)
+                print(error_message)
                 return False
             
             self.token = data["data"]["obtainKrakenToken"]["token"]
+            self._clear_last_error()
             self._log_debug(f"Got token (first 20 chars): {self.token[:20]}...")
             return True
             
         except requests.exceptions.RequestException as e:
-            print(f"Netzwerkfehler bei der Authentifizierung: {e}")
+            error_message = f"Netzwerkfehler bei der Authentifizierung: {e}"
+            self._set_last_error("network", error_message)
+            print(error_message)
             return False
         except (KeyError, TypeError) as e:
-            print(f"Unerwartetes Antwortformat: {e}")
+            error_message = f"Unerwartetes Antwortformat: {e}"
+            self._set_last_error("response", error_message)
+            print(error_message)
             self._log_debug(f"Response: {response.text}")
             return False
 
@@ -652,14 +999,19 @@ class OctopusGermanyClient:
             data = response.json()
             
             if "errors" in data and not self.debug:
-                print(f"GraphQL errors: {data['errors']}")
+                error_message = f"GraphQL errors: {data['errors']}"
+                self._set_last_error("graphql", error_message)
+                print(error_message)
                 # Return partial data if available
                 return data.get("data", {})
             
+            self._clear_last_error()
             return data.get("data", {})
             
         except requests.exceptions.RequestException as e:
-            print(f"Netzwerkfehler: {e}")
+            error_message = f"Netzwerkfehler: {e}"
+            self._set_last_error("network", error_message)
+            print(error_message)
             return {}
 
     def get_account_details(self, account_number: str) -> dict:
@@ -726,16 +1078,118 @@ class OctopusGermanyClient:
                     if not agreement.get("isActive"):
                         continue
                     product = agreement.get("product") or {}
-                    code = product.get("code")
-                    if not code:
+                    display_name = product.get("displayName")
+                    if not display_name:
                         continue
                     return TariffAgreement(
-                        code=code,
+                        display_name=display_name,
                         valid_from=agreement.get("validFrom", ""),
                         valid_to=agreement.get("validTo"),
+                        agreement_id=agreement.get("id"),
                     )
 
         return None
+
+    def get_tariff_settings_for_agreement(
+        self,
+        agreement: TariffAgreement,
+        monthly_base_price_eur: float,
+    ) -> TariffSettings | None:
+        if not agreement.agreement_id:
+            return None
+
+        result = self._graphql_request(
+            RATE_STRUCTURE_QUERY,
+            {"agreementId": agreement.agreement_id},
+        )
+        agreement_data = result.get("agreement", {})
+        if not agreement_data:
+            return None
+
+        return map_rate_structure_to_tariff_settings(
+            agreement.display_name,
+            agreement_data.get("unitRateInformation"),
+            monthly_base_price_eur,
+        )
+
+    def get_tariff_rates_for_agreement(self, agreement: TariffAgreement) -> list[TariffRate]:
+        if not agreement.agreement_id:
+            return []
+
+        result = self._graphql_request(
+            RATE_STRUCTURE_QUERY,
+            {"agreementId": agreement.agreement_id},
+        )
+        agreement_data = result.get("agreement", {})
+        if not agreement_data:
+            return []
+
+        return _extract_tariff_rates(agreement_data.get("unitRateInformation"))
+
+    def get_smart_usage(
+        self,
+        property_id: str,
+        market_supply_point_id: str,
+        day: datetime | date,
+    ) -> list[dict]:
+        """Fetch a single local day of hourly consumption via GetSmartUsage."""
+        if isinstance(day, datetime):
+            local_day = normalize_datetime(day).date()
+        else:
+            local_day = day
+
+        start_local = datetime(local_day.year, local_day.month, local_day.day, tzinfo=APP_TIMEZONE)
+        end_local = start_local + timedelta(days=1)
+        start_utc = start_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end_utc = end_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        variables = {
+            "propertyId": property_id,
+            "timezone": "Europe/Berlin",
+            "startAt": start_utc,
+            "endAt": end_utc,
+            "utilityFilters": [
+                {
+                    "electricityFilters": {
+                        "readingFrequencyType": "HOUR_INTERVAL",
+                        "marketSupplyPointId": str(market_supply_point_id),
+                        "readingDirection": "CONSUMPTION",
+                    }
+                }
+            ],
+        }
+        result = self._graphql_request(SMART_USAGE_QUERY, variables)
+        property_data = result.get("property", {})
+        measurements_data = property_data.get("measurements", {})
+        edges = measurements_data.get("edges", [])
+
+        intervals: list[dict] = []
+        for edge in edges:
+            node = edge.get("node", {})
+            value = node.get("value")
+            start_at = node.get("startAt")
+            end_at = node.get("endAt")
+            if value is None or not start_at or not end_at:
+                continue
+
+            try:
+                start_time = normalize_datetime(datetime.fromisoformat(start_at))
+                end_time = normalize_datetime(datetime.fromisoformat(end_at))
+                intervals.append(
+                    {
+                        "start": start_time,
+                        "end": end_time,
+                        "consumption_kwh": round(float(value), 4),
+                        "duration_seconds": int((end_time - start_time).total_seconds()),
+                        "unit": node.get("unit", "kWh"),
+                        "source": node.get("source", "GetSmartUsage"),
+                    }
+                )
+            except (ValueError, TypeError):
+                continue
+
+        intervals.sort(key=lambda item: item["start"])
+        return intervals
 
     def get_consumption_graphql(self, property_id, period_from=None, period_to=None, fetch_all=False, progress_callback=None):
         """
@@ -1395,7 +1849,8 @@ def main():
             print("  Keine Konten gefunden.")
         sys.exit(0)
     
-    # Ensure Excel template exists in Documents folder
+    # Ensure the app data directory and Excel template exist before continuing.
+    ensure_smartmeter_data_folder()
     ensure_excel_template()
     
     # Parse dates
