@@ -42,8 +42,8 @@ DEFAULT_TARIFF_HEAT_STANDARD_CT = 28.51
 DEFAULT_TARIFF_HEAT_HIGH_CT = 33.51
 DEFAULT_MONTHLY_BASE_PRICE_EUR = 15.94
 DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR = 14.50
-TARIFF_INTELLIGENT_GO = "Intelligent Go"
-TARIFF_INTELLIGENT_HEAT = "Intelligent Heat"
+TARIFF_INTELLIGENT_GO = "Intelligent Octopus Go"
+TARIFF_INTELLIGENT_HEAT = "Octopus Heat"
 DISPLAY_NAME_OCTOPUS_GO = "octopus go"
 DISPLAY_NAME_OCTOPUS_HEAT = "octopus heat"
 DISPLAY_NAME_DYNAMIC_OCTOPUS = "dynamicoctopus"
@@ -1807,6 +1807,61 @@ def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
         return [], None
 
 
+def load_existing_consumption_data() -> tuple[list, datetime | None]:
+    """
+    Load existing consumption data.
+
+    Priority:
+        1. JSON in config folder.
+        2. CSV in data folder (migrated to config JSON on success).
+
+    Any stale consumption.json in the data folder is removed.
+
+    Returns:
+        Tuple of (readings, latest_interval_end)
+    """
+    config_json = get_app_config_folder() / "consumption.json"
+    data_csv = get_smartmeter_data_folder() / "consumption.csv"
+    data_json = get_smartmeter_data_folder() / "consumption.json"
+
+    # 1. Prefer JSON in config folder
+    if config_json.exists():
+        try:
+            with open(config_json, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            readings = data.get('readings', [])
+            for r in readings:
+                if isinstance(r.get('start'), str):
+                    r['start'] = normalize_datetime(datetime.fromisoformat(r['start']))
+                if isinstance(r.get('end'), str):
+                    r['end'] = normalize_datetime(datetime.fromisoformat(r['end']))
+            latest = max((r['end'] for r in readings), default=None)
+            if data_json.exists():
+                try:
+                    data_json.unlink()
+                except OSError:
+                    pass
+            return readings, latest
+        except Exception:
+            pass
+
+    # 2. Fall back to CSV in data folder
+    readings, latest = read_existing_csv(data_csv)
+    if readings:
+        try:
+            save_to_json(readings, config_json)
+        except Exception:
+            pass
+
+    if data_json.exists():
+        try:
+            data_json.unlink()
+        except OSError:
+            pass
+
+    return readings, latest
+
+
 def merge_and_save_csv(all_data: list, csv_path: Path):
     """
     Merge all data, remove duplicates, sort by time, and save to CSV.
@@ -2018,15 +2073,15 @@ def main():
         period_to = parse_date(args.period_to) + timedelta(days=1) - timedelta(seconds=1)
         print(f"Zeitraum bis: {period_to}")
     
-    # Read existing CSV first (before any authentication)
+    # Read existing data first (before any authentication)
     output_path = Path(args.output)
-    
+
     # Create output directory if it doesn't exist
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    existing_data, latest_interval_end = read_existing_csv(output_path)
+    existing_data, latest_interval_end = load_existing_consumption_data()
     
     # Determine date range for fetching new data
     # Never fetch data for the current day (data may be incomplete)
@@ -2163,7 +2218,14 @@ def main():
     # Save in requested format
     output_format = args.output_format
     save_data(all_readings, output_path, output_format)
-    
+
+    # Always keep a JSON copy in the config folder
+    try:
+        json_config_path = get_app_config_folder() / "consumption.json"
+        save_to_json(all_readings, json_config_path)
+    except Exception:
+        pass
+
     # Read back the merged data (now deduplicated and sorted)
     final_data, _ = read_existing_csv(output_path.with_suffix('.csv'))
     

@@ -84,6 +84,7 @@ from octopusdetool.octopusdetool import (
     get_smartmeter_data_folder,
     init_app_config_folder,
     load_excel_tariff_settings,
+    load_existing_consumption_data,
     normalize_datetime,
     save_to_json,
     save_to_yaml,
@@ -109,6 +110,19 @@ OUTPUT_EXTENSIONS = {
     "json": ".json",
     "yaml": ".yaml",
 }
+def _migrate_config_from_data_folder() -> None:
+    """Migrate config.json from data folder to config folder if needed."""
+    data_config = get_smartmeter_data_folder() / "config.json"
+    app_config = get_app_config_folder() / "config.json"
+    if data_config.exists() and not app_config.exists():
+        try:
+            get_app_config_folder().mkdir(parents=True, exist_ok=True)
+            app_config.write_text(data_config.read_text(encoding="utf-8"), encoding="utf-8")
+            data_config.unlink()
+        except Exception:
+            pass
+
+
 GERMAN_MONTH_NAMES = [
     "Januar",
     "Februar",
@@ -406,6 +420,7 @@ class OctopusSmartMeterGUI:
 
         self._set_initial_values()
         self._connect_signals()
+        _migrate_config_from_data_folder()
         self.load_config()
         if self._debug_enabled_from_cli:
             self.debug_checkbox.setChecked(True)
@@ -919,6 +934,15 @@ QListView::item:selected {
                 continue
 
             config[field] = value
+            migrated = True
+
+        # Migrate old tariff type names to new ones
+        old_tariff = config.get(TARIFF_TYPE_CONFIG_KEY, "")
+        if old_tariff == "Intelligent Go":
+            config[TARIFF_TYPE_CONFIG_KEY] = TARIFF_INTELLIGENT_GO
+            migrated = True
+        elif old_tariff == "Intelligent Heat":
+            config[TARIFF_TYPE_CONFIG_KEY] = TARIFF_INTELLIGENT_HEAT
             migrated = True
 
         if migrated and CONFIG_WRITABLE:
@@ -1938,40 +1962,14 @@ QListView::item:selected {
             self.latest_timestamp = None
             self.csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-            if not self.csv_path.exists():
-                self._set_status("Keine consumption.csv gefunden. Bereit zum Abruf aller Daten.")
+            existing_data, latest_end = load_existing_consumption_data()
+            if not existing_data:
+                self._set_status("Keine Verbrauchsdaten gefunden. Bereit zum Abruf aller Daten.")
                 self._refresh_analysis_view()
                 return
 
-            with open(self.csv_path, "r", newline="", encoding="utf-8") as csv_file:
-                reader = csv.DictReader(csv_file)
-                for row in reader:
-                    try:
-                        try:
-                            start = datetime.strptime(row["start"], "%d.%m.%Y %H:%M:%S")
-                            end = datetime.strptime(row["end"], "%d.%m.%Y %H:%M:%S")
-                        except ValueError:
-                            start = normalize_datetime(datetime.fromisoformat(row["start"]))
-                            end = normalize_datetime(datetime.fromisoformat(row["end"]))
-
-                        consumption = float(row["consumption_kwh"])
-                        self.existing_data.append(
-                            {
-                                "start": start,
-                                "end": end,
-                                "consumption_kwh": consumption,
-                            }
-                        )
-
-                        if self.latest_timestamp is None or end > self.latest_timestamp:
-                            self.latest_timestamp = end
-                    except Exception:
-                        continue
-
-            if not self.existing_data:
-                self._set_status("Keine bestehenden Daten gefunden. Bereit zum Abruf.")
-                self._refresh_analysis_view()
-                return
+            self.existing_data = existing_data
+            self.latest_timestamp = latest_end
 
             self._set_default_analysis_date()
             self._refresh_analysis_view()
@@ -1979,7 +1977,7 @@ QListView::item:selected {
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             if self.latest_timestamp and self.latest_timestamp.date() >= (today - timedelta(days=1)).date():
                 self._set_status(
-                    f"CSV ist aktuell: {len(self.existing_data)} Eintraege bis {self.latest_timestamp.date()}."
+                    f"Daten sind aktuell: {len(self.existing_data)} Eintraege bis {self.latest_timestamp.date()}."
                 )
             else:
                 self._set_status(
@@ -1987,7 +1985,7 @@ QListView::item:selected {
                     "Fehlende Daten werden abgerufen."
                 )
         except Exception as exc:
-            self._set_status(f"Fehler beim Lesen der CSV: {exc}")
+            self._set_status(f"Fehler beim Lesen der Verbrauchsdaten: {exc}")
 
     def save_config(self, *, force: bool = False) -> None:
         if not CONFIG_WRITABLE:
@@ -2404,6 +2402,13 @@ QListView::item:selected {
                         update=True,
                     )
                     self._write_csv_file(self.csv_path, unique_data)
+
+                    # Always keep a JSON copy in the config folder
+                    try:
+                        json_config_path = get_app_config_folder() / "consumption.json"
+                        save_to_json(unique_data, json_config_path)
+                    except Exception:
+                        pass
 
                     if self.auto_output_checkbox.isChecked():
                         if format_type == "excel":
