@@ -534,7 +534,7 @@ def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
 
 def get_default_output_path() -> Path:
     """Get the default CSV output path."""
-    return get_smartmeter_data_folder() / "consumption.csv"
+    return get_app_config_folder() / "consumption.csv"
 
 
 def get_default_excel_path(tariff_type: str = TARIFF_INTELLIGENT_GO) -> Path:
@@ -1807,6 +1807,38 @@ def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
         return [], None
 
 
+def migrate_consumption_csv_to_config() -> Path:
+    """Move any legacy Documents consumption.csv into the config folder."""
+    config_csv = get_app_config_folder() / "consumption.csv"
+    legacy_csv = get_smartmeter_data_folder() / "consumption.csv"
+
+    try:
+        os.makedirs(config_csv.parent, exist_ok=True)
+    except Exception:
+        pass
+
+    if not legacy_csv.exists():
+        return config_csv
+
+    if config_csv.exists():
+        try:
+            legacy_csv.unlink()
+        except OSError:
+            pass
+        return config_csv
+
+    try:
+        os.replace(legacy_csv, config_csv)
+    except OSError:
+        try:
+            shutil.copy2(legacy_csv, config_csv)
+            legacy_csv.unlink()
+        except OSError:
+            pass
+
+    return config_csv
+
+
 def load_existing_consumption_data() -> tuple[list, datetime | None]:
     """
     Load existing consumption data.
@@ -1821,7 +1853,7 @@ def load_existing_consumption_data() -> tuple[list, datetime | None]:
         Tuple of (readings, latest_interval_end)
     """
     config_json = get_app_config_folder() / "consumption.json"
-    data_csv = get_smartmeter_data_folder() / "consumption.csv"
+    config_csv = migrate_consumption_csv_to_config()
     data_json = get_smartmeter_data_folder() / "consumption.json"
 
     # 1. Prefer JSON in config folder
@@ -1845,8 +1877,8 @@ def load_existing_consumption_data() -> tuple[list, datetime | None]:
         except Exception:
             pass
 
-    # 2. Fall back to CSV in data folder
-    readings, latest = read_existing_csv(data_csv)
+    # 2. Fall back to CSV in config folder
+    readings, latest = read_existing_csv(config_csv)
     if readings:
         try:
             save_to_json(readings, config_json)

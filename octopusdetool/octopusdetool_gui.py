@@ -109,16 +109,27 @@ OUTPUT_EXTENSIONS = {
     "yaml": ".yaml",
 }
 def _migrate_config_from_data_folder() -> None:
-    """Migrate config.json from data folder to config folder if needed."""
+    """Ensure config.json lives only in the config folder."""
     data_config = get_smartmeter_data_folder() / "config.json"
     app_config = get_app_config_folder() / "config.json"
-    if data_config.exists() and not app_config.exists():
+    if not data_config.exists():
+        return
+
+    try:
+        get_app_config_folder().mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    if not app_config.exists():
         try:
-            get_app_config_folder().mkdir(parents=True, exist_ok=True)
             app_config.write_text(data_config.read_text(encoding="utf-8"), encoding="utf-8")
-            data_config.unlink()
         except Exception:
-            pass
+            return
+
+    try:
+        data_config.unlink()
+    except Exception:
+        pass
 
 
 GERMAN_MONTH_NAMES = [
@@ -2325,7 +2336,7 @@ QDateEdit::drop-down {{
         else:
             _tariff_type, tariff_go_ct, tariff_standard_ct, _tariff_high_ct, monthly_base_price_eur = tariff_values
 
-        data_dir = get_smartmeter_data_folder()
+        data_dir = get_app_config_folder()
         try:
             data_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
