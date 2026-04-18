@@ -70,7 +70,6 @@ QFrame#chartContainer {
 QTabWidget#mainTabWidget::pane {
     background-color: #240748;
     border: 3px solid #a894ff;
-    border-radius: 18px;
     margin-left: 6px;
     margin-right: 6px;
     margin-bottom: 6px;
