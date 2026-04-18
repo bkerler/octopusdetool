@@ -56,8 +56,10 @@ QWidget#unitToggleWidget {
 
 QFrame#heroFrame,
 QFrame#statusFrame,
-QGroupBox,
-QFrame#tariffFrame,
+QGroupBox#accountGroupBox,
+QGroupBox#outputGroupBox,
+QGroupBox#dateGroupBox,
+QWidget#tariffFrame,
 QFrame#analysisControlsFrame,
 QFrame#analysisSummaryFrame,
 QFrame#analysisTableFrame,
@@ -98,22 +100,33 @@ QFrame#statusFrame {
     padding: 6px;
 }
 
-QGroupBox {
-    margin-top: 12px;
-    padding: 14px;
+QFrame#statusFrame {
+    background-color: #2e1160;
 }
 
-QGroupBox::title {
-    subcontrol-origin: margin;
-    left: 12px;
-    padding: 0 6px;
-    color: #f4eeff;
-    background-color: #240748;
-    font: 600 10pt &quot;Segoe UI&quot;;
+QGroupBox#accountGroupBox,
+QGroupBox#dateGroupBox,
+QGroupBox#outputGroupBox,
+QWidget#tariffFrame {
+    margin-top: 12px;
+    background-color: #2e1160;
 }
 
 QLabel {
     color: #f4eeff;
+    background-color: transparent;
+}
+
+QLabel#emailLabel,
+QLabel#passwordLabel,
+QLabel#fromDateLabel,
+QLabel#toDateLabel {
+    background-color: #2e1160;
+}
+
+QLabel#outputFormatLabel,
+QLabel#outputFileLabel,
+QLabel#outputHintLabel {
     background-color: transparent;
 }
 
@@ -139,7 +152,7 @@ QLabel#statusValueLabel {
 
 QLabel#statusTitleLabel,
 QLabel#statusValueLabel {
-    background-color: #240748;
+    background-color: #2e1160;
 }
 
 QLabel#heroSubtitleLabel {
@@ -151,13 +164,19 @@ QLineEdit,
 QComboBox,
 QDateEdit,
 QAbstractSpinBox {
-    background-color: #2e1160;
+    background-color: #240748;
     border: 1px solid #6f4df6;
     border-radius: 10px;
-    padding: 8px 10px;
+    padding: 8px 34px 8px 10px;
     color: #f4eeff;
     selection-background-color: #6f4df6;
     selection-color: #ffffff;
+}
+
+QDateEdit QLineEdit {
+    background-color: #240748;
+    border: none;
+    padding: 0px;
 }
 
 QLineEdit:focus,
@@ -170,8 +189,16 @@ QAbstractSpinBox:focus {
 QComboBox::drop-down,
 QDateEdit::drop-down {
     border: none;
-    width: 26px;
-    background: transparent;
+    width: 28px;
+    background-color: #240748;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+
+QDateEdit::drop-down {
+    padding-right: 2px;
 }
 
 QComboBox::down-arrow,
@@ -285,20 +312,6 @@ QPushButton:hover {
 QPushButton:pressed {
     background-color: #5537cf;
     border-color: #5537cf;
-}
-
-QPushButton#fetchDataButton {
-    background-color: #e98bff;
-    border-color: #e98bff;
-    color: #240748;
-    font: 700 10pt &quot;Segoe UI&quot;;
-    min-height: 20px;
-    padding: 11px 18px;
-}
-
-QPushButton#fetchDataButton:hover {
-    background-color: #f2a6ff;
-    border-color: #f2a6ff;
 }
 
 QPushButton#viewCalendarButton {
@@ -507,6 +520,18 @@ QTableView#analysisTableView QHeaderView::section {
               <string>Zugangsdaten</string>
              </property>
              <layout class="QGridLayout" name="accountLayout">
+              <property name="leftMargin">
+               <number>14</number>
+              </property>
+              <property name="topMargin">
+               <number>14</number>
+              </property>
+              <property name="rightMargin">
+               <number>14</number>
+              </property>
+              <property name="bottomMargin">
+               <number>14</number>
+              </property>
               <property name="horizontalSpacing">
                <number>12</number>
               </property>
@@ -577,6 +602,18 @@ QTableView#analysisTableView QHeaderView::section {
               <string>Ausgabeoptionen</string>
              </property>
              <layout class="QGridLayout" name="outputLayout">
+              <property name="leftMargin">
+               <number>14</number>
+              </property>
+              <property name="topMargin">
+               <number>14</number>
+              </property>
+              <property name="rightMargin">
+               <number>14</number>
+              </property>
+              <property name="bottomMargin">
+               <number>14</number>
+              </property>
               <property name="horizontalSpacing">
                <number>12</number>
               </property>
@@ -671,6 +708,18 @@ QTableView#analysisTableView QHeaderView::section {
               <string>Datumsbereich</string>
              </property>
              <layout class="QHBoxLayout" name="dateLayout">
+              <property name="leftMargin">
+               <number>14</number>
+              </property>
+              <property name="topMargin">
+               <number>14</number>
+              </property>
+              <property name="rightMargin">
+               <number>14</number>
+              </property>
+              <property name="bottomMargin">
+               <number>14</number>
+              </property>
               <property name="spacing">
                <number>12</number>
               </property>
@@ -841,6 +890,13 @@ QTableView#analysisTableView QHeaderView::section {
         <number>18</number>
        </property>
        <item>
+        <widget class="QLabel" name="tariffTitleLabel">
+         <property name="text">
+          <string>Tarif</string>
+         </property>
+        </widget>
+       </item>
+       <item>
         <widget class="QLabel" name="tariffIntroLabel">
          <property name="text">
           <string>Diese Felder werden in der Excel-Arbeitsmappe auf dem Blatt &quot;Einstellungen&quot; in die Zellen B3, B4 und B7 geschrieben.</string>
@@ -851,10 +907,7 @@ QTableView#analysisTableView QHeaderView::section {
         </widget>
        </item>
        <item>
-        <widget class="QFrame" name="tariffFrame">
-         <property name="frameShape">
-          <enum>QFrame::StyledPanel</enum>
-         </property>
+        <widget class="QWidget" name="tariffFrame">
          <layout class="QFormLayout" name="tariffFormLayout">
           <property name="leftMargin">
            <number>18</number>
@@ -885,61 +938,65 @@ QTableView#analysisTableView QHeaderView::section {
            <widget class="QComboBox" name="tariffTypeComboBox"/>
           </item>
           <item row="1" column="0">
-           <widget class="QLabel" name="tariffCodeLabel">
-            <property name="text">
-             <string>Tarif:</string>
-            </property>
-           </widget>
-          </item>
-          <item row="1" column="1">
-           <widget class="QLineEdit" name="tariffCodeLineEdit">
-            <property name="readOnly">
-             <bool>true</bool>
-            </property>
-           </widget>
-          </item>
-          <item row="2" column="0">
            <widget class="QLabel" name="tariffGoLabel">
             <property name="text">
              <string>Tarif Go 00:00-04:59 (ct/kWh)</string>
             </property>
            </widget>
           </item>
-          <item row="2" column="1">
+          <item row="1" column="1">
            <widget class="QLineEdit" name="tariffGoLineEdit"/>
           </item>
-          <item row="3" column="0">
+          <item row="2" column="0">
            <widget class="QLabel" name="tariffStandardLabel">
             <property name="text">
              <string>Tarif Standard 05:00-23:59 (ct/kWh)</string>
             </property>
            </widget>
           </item>
-          <item row="3" column="1">
+          <item row="2" column="1">
            <widget class="QLineEdit" name="tariffStandardLineEdit"/>
           </item>
-          <item row="4" column="0">
+          <item row="3" column="0">
            <widget class="QLabel" name="tariffHighLabel">
             <property name="text">
              <string>Tarif Hoch 18:00-20:59 (ct/kWh)</string>
             </property>
            </widget>
           </item>
-          <item row="4" column="1">
+          <item row="3" column="1">
            <widget class="QLineEdit" name="tariffHighLineEdit"/>
           </item>
-          <item row="5" column="0">
+          <item row="4" column="0">
            <widget class="QLabel" name="basePriceLabel">
             <property name="text">
              <string>Grundpreis pro Monat (€)</string>
             </property>
            </widget>
           </item>
-          <item row="5" column="1">
+          <item row="4" column="1">
            <widget class="QLineEdit" name="basePriceLineEdit"/>
           </item>
          </layout>
         </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="configPathLayout">
+         <item>
+          <widget class="QLabel" name="configPathLabel">
+           <property name="text">
+            <string>Konfigurationspfad:</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLineEdit" name="configPathLineEdit">
+           <property name="readOnly">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
        </item>
        <item>
         <layout class="QHBoxLayout" name="tariffButtonRowLayout">
@@ -960,24 +1017,6 @@ QTableView#analysisTableView QHeaderView::section {
           <widget class="QPushButton" name="saveSettingsButton">
            <property name="text">
             <string>Einstellungen speichern</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <layout class="QHBoxLayout" name="configPathLayout">
-         <item>
-          <widget class="QLabel" name="configPathLabel">
-           <property name="text">
-            <string>Konfigurationspfad:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLineEdit" name="configPathLineEdit">
-           <property name="readOnly">
-            <bool>true</bool>
            </property>
           </widget>
          </item>

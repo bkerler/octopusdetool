@@ -201,6 +201,15 @@ CALENDAR_ICON_PNG_B64 = (
     "dXlpEwOdgLcWlxcfM/n8zm+/BKJxLxpmgkrNXa2M4nFYkEROWaj9pmkUqm7zc3Nfzrd18XFxcXFxcXF5T/KP/cWO467"
     "9H7sAAAAAElFTkSuQmCC"
 )
+CALENDAR_PICK_ICON_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAA9hAAAPYQGoP6dpAAABUElEQVQ4ja2S"
+    "P04CURDGf/NETVxJ3LgtF6AxwT8FNBzAeBML9ACeQAqvwA2MDd02WohiLPQCUhFYCD5tDG8s9rEaXIXCaWYy833ffJP3"
+    "4L/DDrVhh9pYti+z4n2gB85wDBz61uMcdsfnK3FcBJF0MgFPvgZGwOoCgQ8gNI7aRiS3qb1EWzbRvqqu2URjm2j84wTf"
+    "95i+TbQFUPDzkkDPjqkCTwCvI61/F1BN+3ZM1UBPoZSd8DbSO1V257f+FSLcB6HsFby6FXhwwskyZKM0VbEAJrMIk2Io"
+    "cTGUWBwVcVSKocRGmOCoG/maK0xmvELeBoRzXzXdlCMRztwUgO48NF9AOc3srnDppmnOg+YKbG5Lc1YHW9LN25wt8PkF"
+    "KKvq2m/AzJzqOlD2HP+MA91Xww3pT3xeoFEGQnFUg0g6BiCIpGMcNaC9yAHQnpGXwC6OT215lNxGJBV2AAAAAElFTkSu"
+    "QmCC"
+)
 TRASH_ICON_PNG_B64 = (
     "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAAACXBIWXMAAA7EAAAOxAGVKw4bAAADyElEQVRoge3YW8hV"
     "RRQH8N/+vJJbrVNeKiIrI027QEhlRRRZWS9hdDNIwqISInsUNLBCe0i6UBKJ9RJBD5lFWZlBJYlpZamYlPR9WJiGTl5G"
@@ -398,6 +407,9 @@ class OctopusSmartMeterGUI:
         self._setup_analysis_widgets()
         self._setup_view_calendar_popup()
         self._apply_popup_styling()
+        self._configure_range_date_edits()
+        self._configure_settings_fields()
+        self._configure_primary_buttons()
         self._configure_tooltip_palette()
         self._configure_view_calendar_button()
         self._set_window_icon()
@@ -471,8 +483,6 @@ class OctopusSmartMeterGUI:
 
         self.tariff_type_combo = self._find_widget(QComboBox, "tariffTypeComboBox")
         self.tariff_type_label = self._find_widget(QLabel, "tariffTypeLabel")
-        self.tariff_code_label = self._find_widget(QLabel, "tariffCodeLabel")
-        self.tariff_code_line_edit = self._find_widget(QLineEdit, "tariffCodeLineEdit")
         self.tariff_go_label = self._find_widget(QLabel, "tariffGoLabel")
         self.tariff_go_line_edit = self._find_widget(QLineEdit, "tariffGoLineEdit")
         self.tariff_standard_label = self._find_widget(QLabel, "tariffStandardLabel")
@@ -595,8 +605,8 @@ QComboBox {
     background-color: #240748;
     color: #f4eeff;
     border: 1px solid #6f4df6;
-    border-radius: 8px;
-    padding: 6px 12px;
+    border-radius: 10px;
+    padding: 8px 34px 8px 10px;
     selection-background-color: #6f4df6;
     selection-color: #ffffff;
 }
@@ -604,9 +614,11 @@ QComboBox {
 QComboBox::drop-down {
     border: none;
     width: 28px;
-    background: transparent;
+    background-color: #240748;
     subcontrol-origin: padding;
     subcontrol-position: center right;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
 }
 
 QComboBox::down-arrow {
@@ -642,7 +654,7 @@ QListView::item {
 }
 
 QListView::item:hover {
-    background-color: #3a1a6e;
+    background-color: #4a2388;
 }
 
 QListView::item:selected {
@@ -659,6 +671,159 @@ QListView::item:selected {
             popup_window = view.window()
             popup_window.setStyleSheet("background-color: #240748; border: 1px solid #6f4df6;")
             popup_window.setContentsMargins(0, 0, 0, 0)
+
+        abruf_combo_stylesheet = """
+QComboBox {
+    background-color: #1c0638;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 8px 34px 8px 10px;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 28px;
+    background-color: #1c0638;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+
+QComboBox::down-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 6px solid #1c0638;
+    border-right: 6px solid #1c0638;
+    border-top: 8px solid #f4eeff;
+}
+"""
+        self.output_format_combo.setStyleSheet(abruf_combo_stylesheet)
+
+    def _configure_range_date_edits(self) -> None:
+        icon_path = self._ensure_embedded_calendar_pick_icon_file().as_posix()
+        date_edit_stylesheet = f"""
+QDateEdit {{
+    background-color: #1c0638;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 8px 34px 8px 10px;
+    color: #f4eeff;
+}}
+
+QDateEdit::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 28px;
+    border: none;
+    background-color: #1c0638;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}}
+
+QDateEdit::down-arrow {{
+    image: url({icon_path});
+    width: 16px;
+    height: 16px;
+}}
+"""
+        for date_edit in (self.from_date_edit, self.to_date_edit):
+            date_edit.setStyleSheet(date_edit_stylesheet)
+
+    def _ensure_embedded_calendar_pick_icon_file(self) -> Path:
+        icon_path = Path("/tmp/octopusdetool_calendar_pick_icon.png")
+        icon_bytes = base64.b64decode(CALENDAR_PICK_ICON_PNG_B64)
+        if not icon_path.exists() or icon_path.read_bytes() != icon_bytes:
+            icon_path.write_bytes(icon_bytes)
+        return icon_path
+
+    def _configure_settings_fields(self) -> None:
+        line_edit_stylesheet = """
+QLineEdit {
+    background-color: #240748;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 8px 10px;
+    color: #f4eeff;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}
+
+QLineEdit:focus {
+    border: 1px solid #b79dff;
+}
+"""
+        for line_edit in (
+            self.tariff_go_line_edit,
+            self.tariff_standard_line_edit,
+            self.tariff_high_line_edit,
+            self.base_price_line_edit,
+            self.config_path_line_edit,
+        ):
+            line_edit.setStyleSheet(line_edit_stylesheet)
+
+        settings_combo_stylesheet = """
+QComboBox {
+    background-color: #240748;
+    color: #f4eeff;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 8px 34px 8px 10px;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}
+
+QComboBox::drop-down {
+    border: none;
+    width: 28px;
+    background-color: #240748;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    border-top-right-radius: 10px;
+    border-bottom-right-radius: 10px;
+}
+
+QComboBox::down-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 6px solid #240748;
+    border-right: 6px solid #240748;
+    border-top: 8px solid #f4eeff;
+}
+"""
+        self.tariff_type_combo.setStyleSheet(settings_combo_stylesheet)
+
+    def _configure_primary_buttons(self) -> None:
+        primary_button_stylesheet = """
+QPushButton {
+    background-color: #6f4df6;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 9px 16px;
+    color: #ffffff;
+}
+
+QPushButton:hover {
+    background-color: #8d71ff;
+    border-color: #8d71ff;
+}
+
+QPushButton:pressed {
+    background-color: #5537cf;
+    border-color: #5537cf;
+}
+
+QPushButton:disabled {
+    background-color: #4d369f;
+    border-color: #4d369f;
+    color: #d8ccff;
+}
+"""
+        for button in (self.fetch_data_button, self.save_settings_button):
+            button.setStyleSheet(primary_button_stylesheet)
 
     def _configure_tooltip_palette(self) -> None:
         palette = QToolTip.palette()
@@ -767,7 +932,6 @@ QListView::item:selected {
         self._toggle_password_visibility(False)
         self.tariff_type_combo.clear()
         self.tariff_type_combo.addItems([TARIFF_INTELLIGENT_GO, TARIFF_INTELLIGENT_HEAT])
-        self.tariff_code_line_edit.clear()
         self._set_tariff_inputs(
             TARIFF_INTELLIGENT_GO,
             self.default_tariff_settings.get("tariff_go_ct", DEFAULT_TARIFF_GO_CT),
@@ -1440,7 +1604,6 @@ QListView::item:selected {
             self.current_tariff_valid_to = ""
             self.current_tariff_rates = []
             self._set_excel_export_support(True)
-            self.tariff_code_line_edit.setText("None")
             self._persist_requested_tariff_display_name("None")
             self.save_config()
             return
@@ -1449,8 +1612,6 @@ QListView::item:selected {
         self.current_tariff_valid_from = agreement.valid_from
         self.current_tariff_valid_to = agreement.valid_to or ""
         self.current_tariff_rates = list(api_tariff_rates or [])
-        self.tariff_code_label.setText("Tarif:")
-        self.tariff_code_line_edit.setText(agreement.display_name)
         self._persist_requested_tariff_display_name(agreement.display_name)
 
         detected_type = self._resolve_tariff_type_from_display_name(agreement.display_name)
@@ -1937,12 +2098,8 @@ QListView::item:selected {
                     ),
                 ),
             )
-            self.tariff_code_label.setText("Tarif:")
             self.current_tariff_display_name = (
                 saved_display_name if saved_display_name not in {None, ""} else "None"
-            )
-            self.tariff_code_line_edit.setText(
-                "" if self.current_tariff_display_name == "None" else self.current_tariff_display_name
             )
 
             self.on_format_changed(saved_format)
