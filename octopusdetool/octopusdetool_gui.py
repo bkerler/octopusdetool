@@ -541,6 +541,7 @@ class OctopusSmartMeterGUI:
         self._replace_currency_toggle()
         self._setup_analysis_widgets()
         self._setup_view_calendar_popup()
+        self._setup_range_calendar_popup()
         self._apply_popup_styling()
         self._configure_range_date_edits()
         self._configure_settings_fields()
@@ -556,6 +557,7 @@ class OctopusSmartMeterGUI:
         self._excel_export_supported = True
         self._excel_export_reason = ""
         self._has_saved_base_price = False
+        self._active_range_date_edit: QDateEdit | None = None
 
         self.template_path = ensure_excel_template()
         self.default_tariff_settings = load_excel_tariff_settings(self.template_path)
@@ -734,6 +736,11 @@ class OctopusSmartMeterGUI:
         self.view_calendar_popup.setStyleSheet(self.window.styleSheet())
         self.view_calendar_popup.calendar.clicked.connect(self._on_view_calendar_date_selected)
 
+    def _setup_range_calendar_popup(self) -> None:
+        self.range_calendar_popup = ViewCalendarPopup(self.window)
+        self.range_calendar_popup.setStyleSheet(self.window.styleSheet())
+        self.range_calendar_popup.calendar.clicked.connect(self._on_range_calendar_date_selected)
+
     def _apply_popup_styling(self) -> None:
         combo_stylesheet = _build_combo_stylesheet("#240748")
         popup_stylesheet = _build_popup_list_stylesheet("#240748")
@@ -750,41 +757,59 @@ class OctopusSmartMeterGUI:
         self.output_format_combo.setStyleSheet(_build_combo_stylesheet("#1c0638"))
 
     def _configure_range_date_edits(self) -> None:
-        icon_path = self._ensure_embedded_calendar_pick_icon_file().as_posix()
         date_edit_stylesheet = f"""
 QDateEdit {{
     background-color: #1c0638;
     border: 1px solid #6f4df6;
     border-radius: 10px;
-    padding: 8px 34px 8px 10px;
+    padding: 8px 28px 8px 10px;
     color: #f4eeff;
 }}
 
 QDateEdit::drop-down {{
     subcontrol-origin: padding;
     subcontrol-position: center right;
-    width: 28px;
+    width: 0px;
     border: none;
     background-color: #1c0638;
     border-top-right-radius: 10px;
     border-bottom-right-radius: 10px;
 }}
-
-QDateEdit::down-arrow {{
-    image: url({icon_path});
-    width: 16px;
-    height: 16px;
-}}
 """
         for date_edit in (self.from_date_edit, self.to_date_edit):
             date_edit.setStyleSheet(date_edit_stylesheet)
+            date_edit.setMinimumWidth(146)
+            editor = date_edit.lineEdit()
+            if editor is None:
+                continue
+            if not editor.property("calendar_icon_embedded"):
+                action = editor.addAction(
+                    _icon_from_base64(CALENDAR_PICK_ICON_PNG_B64),
+                    QLineEdit.ActionPosition.TrailingPosition,
+                )
+                action.setToolTip("Kalender oeffnen")
+                action.triggered.connect(lambda checked=False, target=date_edit: self._open_range_calendar_popup(target))
+                editor.setProperty("calendar_icon_embedded", True)
 
-    def _ensure_embedded_calendar_pick_icon_file(self) -> Path:
-        icon_path = Path("/tmp/octopusdetool_calendar_pick_icon.png")
-        icon_bytes = base64.b64decode(CALENDAR_PICK_ICON_PNG_B64)
-        if not icon_path.exists() or icon_path.read_bytes() != icon_bytes:
-            icon_path.write_bytes(icon_bytes)
-        return icon_path
+    def _open_range_calendar_popup(self, date_edit: QDateEdit) -> None:
+        self._active_range_date_edit = date_edit
+        calendar = self.range_calendar_popup.calendar
+        calendar.setSelectedDate(date_edit.date())
+        year = date_edit.date().year()
+        month = date_edit.date().month()
+        calendar.setCurrentPage(year, month)
+        popup_pos = date_edit.mapToGlobal(date_edit.rect().bottomLeft())
+        self.range_calendar_popup.adjustSize()
+        self.range_calendar_popup.move(popup_pos)
+        self.range_calendar_popup.show()
+        self.range_calendar_popup.raise_()
+        self.range_calendar_popup.activateWindow()
+
+    def _on_range_calendar_date_selected(self, selected_date: QDate) -> None:
+        if self._active_range_date_edit is not None:
+            self._active_range_date_edit.setDate(selected_date)
+            self._active_range_date_edit.editingFinished.emit()
+        self.range_calendar_popup.hide()
 
     def _configure_settings_fields(self) -> None:
         line_edit_stylesheet = _build_line_edit_stylesheet("#240748")
@@ -1279,6 +1304,9 @@ QDateEdit::down-arrow {{
         except ValueError:
             date_edit.setDate(fallback)
 
+    def _format_decimal_input(self, value: float) -> str:
+        return f"{value:.2f}".replace(".", ",")
+
     def _set_tariff_inputs(
         self,
         tariff_type: str,
@@ -1292,10 +1320,10 @@ QDateEdit::down-arrow {{
         self.tariff_type_combo.blockSignals(True)
         self.tariff_type_combo.setCurrentText(tariff_type)
         self.tariff_type_combo.blockSignals(False)
-        self.tariff_go_line_edit.setText(f"{tariff_go_ct:.2f}")
-        self.tariff_standard_line_edit.setText(f"{tariff_standard_ct:.2f}")
-        self.tariff_high_line_edit.setText(f"{tariff_high_ct:.2f}")
-        self.base_price_line_edit.setText(f"{base_price_eur:.2f}")
+        self.tariff_go_line_edit.setText(self._format_decimal_input(tariff_go_ct))
+        self.tariff_standard_line_edit.setText(self._format_decimal_input(tariff_standard_ct))
+        self.tariff_high_line_edit.setText(self._format_decimal_input(tariff_high_ct))
+        self.base_price_line_edit.setText(self._format_decimal_input(base_price_eur))
         self._apply_tariff_type_ui()
         self._sync_default_excel_output_path(previous_tariff_type)
 
@@ -1496,7 +1524,7 @@ QDateEdit::down-arrow {{
 
         for index, rate in enumerate(displayed_rates):
             labels[index].setText(self._format_rate_label(rate))
-            line_edits[index].setText(f"{rate.rate_ct:.2f}")
+            line_edits[index].setText(self._format_decimal_input(rate.rate_ct))
 
         has_third_rate = len(displayed_rates) >= 3
         self.tariff_high_label.setVisible(has_third_rate)
@@ -1680,7 +1708,14 @@ QDateEdit::down-arrow {{
             "month": "MM.yyyy",
             "year": "yyyy",
         }.get(mode, "dd.MM.yyyy")
+        minimum_width = {
+            "day": 160,
+            "week": 160,
+            "month": 120,
+            "year": 78,
+        }.get(mode, 160)
         self.view_date_edit.setDisplayFormat(display_format)
+        self.view_date_edit.setMinimumWidth(minimum_width)
 
         current_date = self.view_date_edit.date()
         normalized_date = current_date
