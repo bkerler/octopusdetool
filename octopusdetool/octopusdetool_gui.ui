@@ -587,11 +587,32 @@ QTableView#analysisTableView QHeaderView::section {
                </widget>
               </item>
               <item row="3" column="0" colspan="3">
-               <widget class="QCheckBox" name="debugCheckBox">
-                <property name="text">
-                 <string>Debug-Ausgabe in Anwendungsordner/log.txt speichern</string>
+               <layout class="QHBoxLayout" name="debugOutputRowLayout">
+                <property name="spacing">
+                 <number>10</number>
                 </property>
-               </widget>
+                <item>
+                 <widget class="QCheckBox" name="debugCheckBox">
+                  <property name="text">
+                   <string>Debug-Ausgabe speichern</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QLineEdit" name="debugOutputLineEdit">
+                  <property name="clearButtonEnabled">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="browseDebugOutputButton">
+                  <property name="text">
+                   <string>Speichern unter</string>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
               </item>
              </layout>
             </widget>

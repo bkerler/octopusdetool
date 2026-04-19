@@ -71,6 +71,7 @@ from octopusdetool.octopusdetool import (
     TariffAgreement,
     TariffRate,
     classify_tariff_zone,
+    cleanup_app_config_folder,
     detect_excel_template_type,
     ensure_excel_template,
     fill_excel_template,
@@ -102,6 +103,7 @@ LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY = "last_tariff_display_name"
 TARIFF_RATES_CONFIG_KEY = "tariff_rates"
 EXCEL_EXPORT_SUPPORTED_CONFIG_KEY = "excel_export_supported"
 EXCEL_EXPORT_REASON_CONFIG_KEY = "excel_export_reason"
+DEBUG_LOG_FILE_CONFIG_KEY = "debug_log_file"
 OUTPUT_EXTENSIONS = {
     "excel": ".xlsx",
     "csv": ".csv",
@@ -570,7 +572,7 @@ class OctopusSmartMeterGUI:
         self._has_saved_base_price = False
         self._active_range_date_edit: QDateEdit | None = None
 
-        self.template_path = ensure_excel_template()
+        self.template_path = get_default_excel_path(self.current_tariff_type)
         self.default_tariff_settings = load_excel_tariff_settings(self.template_path)
         self.csv_path = get_default_output_path()
         self.existing_data: list[dict] = []
@@ -581,6 +583,7 @@ class OctopusSmartMeterGUI:
         self._set_initial_values()
         self._connect_signals()
         _migrate_config_from_data_folder()
+        cleanup_app_config_folder()
         self.load_config()
         if self._debug_enabled_from_cli:
             self.debug_checkbox.setChecked(True)
@@ -616,6 +619,8 @@ class OctopusSmartMeterGUI:
         self.show_password_checkbox = self._find_widget(QCheckBox, "showPasswordCheckBox")
         self.save_config_checkbox = self._find_widget(QCheckBox, "saveConfigCheckBox")
         self.debug_checkbox = self._find_widget(QCheckBox, "debugCheckBox")
+        self.debug_output_line_edit = self._find_widget(QLineEdit, "debugOutputLineEdit")
+        self.browse_debug_output_button = self._find_widget(QPushButton, "browseDebugOutputButton")
         self.output_format_combo = self._find_widget(QComboBox, "outputFormatComboBox")
         self.auto_output_checkbox = self._find_widget(QCheckBox, "autoOutputCheckBox")
         self.output_file_line_edit = self._find_widget(QLineEdit, "outputFileLineEdit")
@@ -677,6 +682,7 @@ class OctopusSmartMeterGUI:
         for line_edit in (
             self.email_line_edit,
             self.password_line_edit,
+            self.debug_output_line_edit,
             self.output_file_line_edit,
         ):
             line_edit.setClearButtonEnabled(False)
@@ -941,7 +947,8 @@ QDateEdit::drop-down {{
         self.from_date_edit.setDate(QDate(2024, 1, 1))
         self.to_date_edit.setDate(QDate.currentDate())
         self.output_format_combo.setCurrentText("excel")
-        self.auto_output_checkbox.setChecked(True)
+        self.auto_output_checkbox.setChecked(False)
+        self.debug_output_line_edit.setText(str(get_smartmeter_data_folder() / "log.txt"))
         self.output_file_line_edit.setText(str(self._get_default_output_path("excel")))
         self.progress_bar.hide()
         self._toggle_password_visibility(False)
@@ -969,6 +976,8 @@ QDateEdit::drop-down {{
         self.output_format_combo.currentTextChanged.connect(self.on_format_changed)
         self.output_file_line_edit.editingFinished.connect(self._normalize_output_entry)
         self.browse_output_button.clicked.connect(self.browse_output_file)
+        self.debug_output_line_edit.editingFinished.connect(self._normalize_debug_output_entry)
+        self.browse_debug_output_button.clicked.connect(self.browse_debug_output_file)
         self.fetch_data_button.clicked.connect(self.get_data)
         self.tariff_type_combo.currentTextChanged.connect(self._on_tariff_type_changed)
         self.tariff_go_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
@@ -1013,7 +1022,25 @@ QDateEdit::drop-down {{
         self._fit_window_to_content(recenter=True)
 
     def _get_debug_log_path(self) -> Path:
-        return get_app_config_folder() / "log.txt"
+        raw_value = self.debug_output_line_edit.text().strip()
+        if not raw_value:
+            return get_smartmeter_data_folder() / "log.txt"
+        return Path(raw_value).expanduser()
+
+    def _normalize_debug_output_entry(self) -> None:
+        self.debug_output_line_edit.setText(str(self._get_debug_log_path()))
+
+    def browse_debug_output_file(self) -> None:
+        default_path = self._get_debug_log_path()
+        filename, _ = QFileDialog.getSaveFileName(
+            self.window,
+            "Debug-Ausgabe speichern unter",
+            str(default_path),
+            "Log-Dateien (*.txt *.log);;Textdateien (*.txt);;Alle Dateien (*)",
+        )
+        if not filename:
+            return
+        self.debug_output_line_edit.setText(str(Path(filename).expanduser()))
 
     def _content_height_for_window_width(self, window_width: int) -> int:
         content_layout = self.scroll_area_contents.layout()
@@ -1932,10 +1959,128 @@ QDateEdit::drop-down {{
         buckets: list[DisplayBucket],
         first_column_title: str,
         *,
+        mode: str,
+        selected_date: date,
         show_currency: bool,
         tariff_type: str,
     ) -> None:
         self.analysis_table_model.clear()
+        if mode == "day":
+            self.analysis_table_model.setHorizontalHeaderLabels(
+                ["Tag mit Datum + Stunde", "Zaehlerstand", "Verbrauch", "Tarif"]
+            )
+
+            start_dt = datetime(selected_date.year, selected_date.month, selected_date.day)
+            end_dt = start_dt + timedelta(days=1)
+            running_meter_reading = 0.0
+
+            for reading in sorted(
+                self.existing_data,
+                key=lambda item: normalize_datetime(item["start"]),
+            ):
+                reading_start = normalize_datetime(reading["start"])
+                consumption_value = float(reading["consumption_kwh"])
+                running_meter_reading += consumption_value
+
+                if reading_start < start_dt or reading_start >= end_dt:
+                    continue
+
+                timestamp_label = (
+                    f"{GERMAN_WEEKDAY_NAMES[reading_start.weekday()]}, "
+                    f"{reading_start.strftime('%d.%m.%Y %H:00')}"
+                )
+                consumption_text = f"{self._format_decimal(consumption_value, 3)} kWh"
+                meter_text = f"{self._format_decimal(running_meter_reading, 3)} kWh"
+                tariff_name = self._get_rate_name_for_reading(reading_start, tariff_type)
+
+                row_items = [
+                    QStandardItem(timestamp_label),
+                    QStandardItem(meter_text),
+                    QStandardItem(consumption_text),
+                    QStandardItem(tariff_name),
+                ]
+                for item in row_items[1:3]:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+                self.analysis_table_model.appendRow(row_items)
+
+            header = self.analysis_table_view.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            for index in range(1, self.analysis_table_model.columnCount()):
+                header.setSectionResizeMode(index, QHeaderView.ResizeMode.Stretch)
+            return
+
+        if mode in {"week", "month", "year"}:
+            unit_title = "EUR" if show_currency else "kWh"
+            rate_order = self._get_analysis_rate_order(tariff_type)
+            rate_prices = self._get_analysis_rate_prices(tariff_type)
+            headers = [first_column_title, "Zaehlerstand", *rate_order]
+            headers.append(f"Gesamt ({unit_title})")
+            self.analysis_table_model.setHorizontalHeaderLabels(headers)
+
+            bucket_end_values: list[float] = [0.0] * len(buckets)
+            running_meter_reading = 0.0
+            if mode == "week":
+                start_date = selected_date - timedelta(days=selected_date.weekday())
+            elif mode == "month":
+                start_date = date(selected_date.year, selected_date.month, 1)
+            else:
+                start_date = date(selected_date.year, 1, 1)
+
+            for reading in sorted(
+                self.existing_data,
+                key=lambda item: normalize_datetime(item["start"]),
+            ):
+                reading_start = normalize_datetime(reading["start"])
+                running_meter_reading += float(reading["consumption_kwh"])
+
+                if mode == "week":
+                    end_date = start_date + timedelta(days=6)
+                    if reading_start.date() < start_date or reading_start.date() > end_date:
+                        continue
+                    bucket_index = (reading_start.date() - start_date).days
+                elif mode == "month":
+                    if reading_start.year != selected_date.year or reading_start.month != selected_date.month:
+                        continue
+                    bucket_index = reading_start.day - 1
+                else:
+                    if reading_start.year != selected_date.year:
+                        continue
+                    bucket_index = reading_start.month - 1
+
+                if 0 <= bucket_index < len(bucket_end_values):
+                    bucket_end_values[bucket_index] = running_meter_reading
+
+            for index, bucket in enumerate(buckets):
+                meter_text = f"{self._format_decimal(bucket_end_values[index], 3)} kWh"
+                if show_currency:
+                    rate_values = [
+                        f"{self._format_decimal(bucket.rate_cost_eur(rate_name, rate_prices.get(rate_name, 0.0)), 2)} EUR"
+                        for rate_name in rate_order
+                    ]
+                    total_value = f"{self._format_decimal(bucket.total_cost_eur(rate_prices), 2)} EUR"
+                else:
+                    rate_values = [
+                        f"{self._format_decimal(bucket.rate_kwh(rate_name), 3)} kWh"
+                        for rate_name in rate_order
+                    ]
+                    total_value = f"{self._format_decimal(bucket.total_kwh, 3)} kWh"
+
+                row_items = [QStandardItem(bucket.tooltip_label), QStandardItem(meter_text)]
+                row_items.extend(QStandardItem(value) for value in rate_values)
+                row_items.append(QStandardItem(total_value))
+
+                for item in row_items[1:]:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+                self.analysis_table_model.appendRow(row_items)
+
+            header = self.analysis_table_view.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            for index in range(1, self.analysis_table_model.columnCount()):
+                header.setSectionResizeMode(index, QHeaderView.ResizeMode.Stretch)
+            return
+
         unit_title = "EUR" if show_currency else "kWh"
         rate_order = self._get_analysis_rate_order(tariff_type)
         rate_prices = self._get_analysis_rate_prices(tariff_type)
@@ -2031,6 +2176,8 @@ QDateEdit::drop-down {{
         self._populate_analysis_table(
             buckets,
             first_column_title,
+            mode=mode,
+            selected_date=selected_date,
             show_currency=show_currency,
             tariff_type=tariff_type,
         )
@@ -2054,7 +2201,7 @@ QDateEdit::drop-down {{
             self.password_line_edit.setText(config.get("password", ""))
             self.save_config_checkbox.setChecked(bool(config_saving_enabled))
             self.debug_checkbox.setChecked(bool(config.get("debug", False)))
-            self.auto_output_checkbox.setChecked(bool(config.get(AUTO_OUTPUT_FLAG, True)))
+            self.auto_output_checkbox.setChecked(bool(config.get(AUTO_OUTPUT_FLAG, False)))
 
             self.output_format_combo.blockSignals(True)
             self.output_format_combo.setCurrentText(saved_format)
@@ -2078,6 +2225,9 @@ QDateEdit::drop-down {{
                 )
             )
             self._excel_export_reason = str(config.get(EXCEL_EXPORT_REASON_CONFIG_KEY, ""))
+            self.debug_output_line_edit.setText(
+                config.get(DEBUG_LOG_FILE_CONFIG_KEY, str(get_smartmeter_data_folder() / "log.txt"))
+            )
 
             if config_saving_enabled:
                 saved_output_file = config.get("output_file") or config.get("excel_file")
@@ -2190,6 +2340,7 @@ QDateEdit::drop-down {{
             "output_format": self.output_format_combo.currentText(),
             "from_date": self._date_to_string(self.from_date_edit),
             "debug": self.debug_checkbox.isChecked(),
+            DEBUG_LOG_FILE_CONFIG_KEY: str(self._get_debug_log_path()),
             AUTO_OUTPUT_FLAG: self.auto_output_checkbox.isChecked(),
             TARIFF_TYPE_CONFIG_KEY: tariff_type,
             LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY: self.current_tariff_display_name or "None",
@@ -2584,13 +2735,6 @@ QDateEdit::drop-down {{
                         update=True,
                     )
                     self._write_csv_file(self.csv_path, unique_data)
-
-                    # Always keep a JSON copy in the config folder
-                    try:
-                        json_config_path = get_app_config_folder() / "consumption.json"
-                        save_to_json(unique_data, json_config_path)
-                    except Exception:
-                        pass
 
                     if self.auto_output_checkbox.isChecked():
                         if format_type == "excel":

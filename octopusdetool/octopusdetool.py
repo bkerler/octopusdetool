@@ -537,6 +537,25 @@ def get_default_output_path() -> Path:
     return get_app_config_folder() / "consumption.csv"
 
 
+def cleanup_app_config_folder() -> None:
+    """Keep only config.json and consumption.csv in the app config folder."""
+    folder = get_app_config_folder()
+    allowed = {"config.json", "consumption.csv"}
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+
+    for child in folder.iterdir():
+        if child.name in allowed:
+            continue
+        if child.is_file():
+            try:
+                child.unlink()
+            except OSError:
+                pass
+
+
 def get_default_excel_path(tariff_type: str = TARIFF_INTELLIGENT_GO) -> Path:
     """Get the default Excel output path shown in the UI/CLI."""
     filename = (
@@ -1843,55 +1862,11 @@ def load_existing_consumption_data() -> tuple[list, datetime | None]:
     """
     Load existing consumption data.
 
-    Priority:
-        1. JSON in config folder.
-        2. CSV in data folder (migrated to config JSON on success).
-
-    Any stale consumption.json in the data folder is removed.
-
     Returns:
         Tuple of (readings, latest_interval_end)
     """
-    config_json = get_app_config_folder() / "consumption.json"
     config_csv = migrate_consumption_csv_to_config()
-    data_json = get_smartmeter_data_folder() / "consumption.json"
-
-    # 1. Prefer JSON in config folder
-    if config_json.exists():
-        try:
-            with open(config_json, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            readings = data.get('readings', [])
-            for r in readings:
-                if isinstance(r.get('start'), str):
-                    r['start'] = normalize_datetime(datetime.fromisoformat(r['start']))
-                if isinstance(r.get('end'), str):
-                    r['end'] = normalize_datetime(datetime.fromisoformat(r['end']))
-            latest = max((r['end'] for r in readings), default=None)
-            if data_json.exists():
-                try:
-                    data_json.unlink()
-                except OSError:
-                    pass
-            return readings, latest
-        except Exception:
-            pass
-
-    # 2. Fall back to CSV in config folder
-    readings, latest = read_existing_csv(config_csv)
-    if readings:
-        try:
-            save_to_json(readings, config_json)
-        except Exception:
-            pass
-
-    if data_json.exists():
-        try:
-            data_json.unlink()
-        except OSError:
-            pass
-
-    return readings, latest
+    return read_existing_csv(config_csv)
 
 
 def merge_and_save_csv(all_data: list, csv_path: Path):
@@ -2017,8 +1992,8 @@ def main():
     )
     parser.add_argument(
         "--output", 
-        default=str(get_default_output_path()),
-        help=f"Output CSV file path (default: {get_default_output_path()})"
+        default="",
+        help="Optionaler Zusatzexportpfad fuer CSV/JSON/YAML"
     )
     parser.add_argument(
         "--period-from", 
@@ -2043,8 +2018,8 @@ def main():
     parser.add_argument(
         "--fill-excel",
         metavar="TEMPLATE",
-        default=str(get_default_excel_path()),
-        help=f"Fill an Excel template with consumption data (default: {get_default_excel_path()})"
+        default="",
+        help="Excel-Datei/Vorlage mit Verbrauchsdaten fuellen"
     )
     parser.add_argument(
         "--debug",
@@ -2088,10 +2063,10 @@ def main():
     if not config_ok:
         print(f"Warnung: {config_error}")
         print("Einstellungen werden nicht gespeichert.")
+    cleanup_app_config_folder()
 
-    # Ensure the app data directory and Excel template exist before continuing.
+    # Ensure the data directory exists before continuing.
     ensure_smartmeter_data_folder()
-    ensure_excel_template()
     
     # Parse dates
     period_from = None
@@ -2106,13 +2081,12 @@ def main():
         print(f"Zeitraum bis: {period_to}")
     
     # Read existing data first (before any authentication)
-    output_path = Path(args.output)
-
-    # Create output directory if it doesn't exist
-    try:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        pass
+    output_path = Path(args.output) if args.output else None
+    if output_path is not None:
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
     existing_data, latest_interval_end = load_existing_consumption_data()
     
     # Determine date range for fetching new data
@@ -2247,19 +2221,17 @@ def main():
     # Remove duplicates and save
     print(f"\nFasse Daten zusammen: {len(existing_data)} existierende + {len(new_readings)} neue = {len(all_readings)} total")
     
-    # Save in requested format
-    output_format = args.output_format
-    save_data(all_readings, output_path, output_format)
-
-    # Always keep a JSON copy in the config folder
-    try:
-        json_config_path = get_app_config_folder() / "consumption.json"
-        save_to_json(all_readings, json_config_path)
-    except Exception:
-        pass
+    # Always keep the merged consumption.csv in the app config folder
+    config_csv_path = get_default_output_path()
+    merge_and_save_csv(all_readings, config_csv_path)
 
     # Read back the merged data (now deduplicated and sorted)
-    final_data, _ = read_existing_csv(output_path.with_suffix('.csv'))
+    final_data, _ = read_existing_csv(config_csv_path)
+
+    # Optional extra export only when explicitly requested
+    output_format = args.output_format
+    if output_path is not None:
+        save_data(final_data, output_path, output_format)
     
     # Show data summary
     print(f"\nInsgesamt: {len(final_data)} Verbrauchsdaten")
@@ -2293,12 +2265,13 @@ def main():
     
     print("\n" + "="*60)
     print("Daten erfolgreich geschrieben nach:")
-    if output_format == "csv":
-        print(f"  - CSV: {output_path.with_suffix('.csv')}")
-    elif output_format == "json":
-        print(f"  - JSON: {output_path.with_suffix('.json')}")
-    elif output_format == "yaml":
-        print(f"  - YAML: {output_path.with_suffix('.yaml')}")
+    print(f"  - App-CSV: {config_csv_path}")
+    if output_path is not None and output_format == "csv":
+        print(f"  - Zusatz-CSV: {output_path.with_suffix('.csv')}")
+    elif output_path is not None and output_format == "json":
+        print(f"  - Zusatz-JSON: {output_path.with_suffix('.json')}")
+    elif output_path is not None and output_format == "yaml":
+        print(f"  - Zusatz-YAML: {output_path.with_suffix('.yaml')}")
     if args.fill_excel:
         print(f"  - Excel: {Path(args.fill_excel)}")
     print("="*60)
