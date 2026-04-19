@@ -1528,14 +1528,38 @@ def parse_datetime(datetime_str: str) -> datetime:
     return datetime.strptime(datetime_str, "%d.%m.%Y %H:%M:%S")
 
 
+def build_readings_with_meter_reading(readings: list) -> list[dict]:
+    """Return sorted readings enriched with cumulative meter_reading_kwh."""
+    sorted_readings = sorted(
+        readings,
+        key=lambda reading: (
+            normalize_datetime(reading["start"])
+            if isinstance(reading["start"], datetime)
+            else datetime.fromisoformat(str(reading["start"]))
+        ),
+    )
+
+    running_meter_reading = 0.0
+    enriched_readings: list[dict] = []
+    for reading in sorted_readings:
+        consumption_value = float(reading["consumption_kwh"])
+        running_meter_reading += consumption_value
+        enriched_reading = dict(reading)
+        enriched_reading["meter_reading_kwh"] = round(running_meter_reading, 4)
+        enriched_readings.append(enriched_reading)
+
+    return enriched_readings
+
+
 def convert_readings_for_export(readings: list) -> list:
     """Convert readings to serializable format for JSON/YAML export."""
     export_data = []
-    for reading in readings:
+    for reading in build_readings_with_meter_reading(readings):
         export_data.append({
             'start': reading['start'].isoformat() if isinstance(reading['start'], datetime) else reading['start'],
             'end': reading['end'].isoformat() if isinstance(reading['end'], datetime) else reading['end'],
             'consumption_kwh': reading['consumption_kwh'],
+            'meter_reading_kwh': reading['meter_reading_kwh'],
             'duration_seconds': reading.get('duration_seconds'),
             'unit': reading.get('unit', 'kWh')
         })
@@ -1890,17 +1914,19 @@ def merge_and_save_csv(all_data: list, csv_path: Path):
     # Convert back to list and sort
     unique_data = list(seen.values())
     unique_data.sort(key=lambda x: x['start'])
+    export_rows = build_readings_with_meter_reading(unique_data)
     
     # Write to CSV
     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['start', 'end', 'consumption_kwh'])
+        writer.writerow(['start', 'end', 'consumption_kwh', 'meter_reading_kwh'])
         
-        for reading in unique_data:
+        for reading in export_rows:
             writer.writerow([
                 format_datetime(reading['start']),
                 format_datetime(reading['end']),
-                reading['consumption_kwh']
+                reading['consumption_kwh'],
+                reading['meter_reading_kwh'],
             ])
     
     print(f"{len(unique_data)} Einträge gespeichert nach {csv_path}")
@@ -1928,18 +1954,20 @@ def save_data(all_data: list, output_path: Path, output_format: str = "csv"):
     # Convert back to list and sort
     unique_data = list(seen.values())
     unique_data.sort(key=lambda x: x['start'] if isinstance(x['start'], datetime) else datetime.fromisoformat(x['start']))
+    export_rows = build_readings_with_meter_reading(unique_data)
     
     if output_format == "csv":
         # Change extension to .csv
         csv_path = output_path.with_suffix('.csv')
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['start', 'end', 'consumption_kwh'])
-            for reading in unique_data:
+            writer.writerow(['start', 'end', 'consumption_kwh', 'meter_reading_kwh'])
+            for reading in export_rows:
                 writer.writerow([
                     format_datetime(reading['start']) if isinstance(reading['start'], datetime) else reading['start'],
                     format_datetime(reading['end']) if isinstance(reading['end'], datetime) else reading['end'],
-                    reading['consumption_kwh']
+                    reading['consumption_kwh'],
+                    reading['meter_reading_kwh'],
                 ])
         print(f"{len(unique_data)} Einträge gespeichert nach {csv_path}")
         return True
