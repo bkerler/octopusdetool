@@ -22,8 +22,8 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 - 🖥️ **GUI-Version** - Benutzerfreundliche grafische Oberfläche
 
 ## Warnhinweis
-Der Zählerstand wird inkrementell durch die Summierung aller Verbrauchsdaten berechnet. Da ich aktuell noch nicht herausgefunden habe, wie man den Zählerstand
-per GraphQL abfragt, ist es daher normal dass die Angabe im Tool nicht mit den echten Stromzählerdaten übereinstimmt.
+Der Zählerstand wird inkrementell durch die Summierung aller Verbrauchsdaten berechnet, basierend auf angegebenen Referenzdaten unter Einstellungen. 
+Daher können errechnete Zählerstände ggf. von echten Zählerständen abweichen.
 
 ## Voraussetzungen
 
