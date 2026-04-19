@@ -533,14 +533,19 @@ def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
 
 
 def get_default_output_path() -> Path:
-    """Get the default CSV output path."""
+    """Get the default internal readings cache path."""
+    return get_app_config_folder() / "readings.json"
+
+
+def get_default_consumption_csv_path() -> Path:
+    """Get the default API-format CSV cache path."""
     return get_app_config_folder() / "consumption.csv"
 
 
 def cleanup_app_config_folder() -> None:
-    """Keep only config.json and consumption.csv in the app config folder."""
+    """Keep only config.json, readings.json, and consumption.csv in the app config folder."""
     folder = get_app_config_folder()
-    allowed = {"config.json", "consumption.csv"}
+    allowed = {"config.json", "readings.json", "consumption.csv"}
     try:
         folder.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -1028,6 +1033,33 @@ query GetSmartUsage(
 }
 """
 
+METER_READINGS_QUERY = """
+query getMeterReadingsElectricity($accountNumber: String!, $meterId: ID!, $cursor: String) {
+    electricityMeterReadings(
+        first: 20
+        after: $cursor
+        accountNumber: $accountNumber
+        meterId: $meterId
+    ) {
+        edges {
+            node {
+                readAt
+                value
+                registerObisCode
+                typeOfRead
+                registerType
+                origin
+                meterId
+            }
+        }
+        pageInfo {
+            endCursor
+            hasNextPage
+        }
+    }
+}
+"""
+
 
 class OctopusGermanyClient:
     """Client for Octopus Energy Germany GraphQL API."""
@@ -1341,10 +1373,13 @@ class OctopusGermanyClient:
                     {
                         "start": start_time,
                         "end": end_time,
-                        "consumption_kwh": round(float(value), 4),
+                        "consumption_kwh": float(value),
                         "duration_seconds": int((end_time - start_time).total_seconds()),
                         "unit": node.get("unit", "kWh"),
                         "source": node.get("source", "GetSmartUsage"),
+                        "api_start": str(start_at),
+                        "api_end": str(end_at),
+                        "api_value": str(value),
                     }
                 )
             except (ValueError, TypeError):
@@ -1352,6 +1387,112 @@ class OctopusGermanyClient:
 
         intervals.sort(key=lambda item: item["start"])
         return intervals
+
+    def get_consumption_smart_usage(
+        self,
+        property_id: str,
+        market_supply_point_id: str,
+        period_from: datetime | None = None,
+        period_to: datetime | None = None,
+        progress_callback=None,
+    ) -> list[dict]:
+        """Fetch hourly consumption day-by-day via GetSmartUsage."""
+        today = get_today_start()
+        yesterday_end = today - timedelta(seconds=1)
+
+        if period_to and normalize_datetime(period_to) >= today:
+            period_to = yesterday_end
+            self._log_debug(f"Clamped period_to to yesterday: {period_to}")
+
+        local_start_date = to_local_datetime(period_from).date() if period_from else to_local_datetime(yesterday_end).date()
+        local_end_date = to_local_datetime(period_to).date() if period_to else local_start_date
+
+        if local_end_date < local_start_date:
+            return []
+
+        all_intervals: list[dict] = []
+        total_days = (local_end_date - local_start_date).days + 1
+        for day_index in range(total_days):
+            current_day = local_start_date + timedelta(days=day_index)
+            day_intervals = self.get_smart_usage(
+                property_id=property_id,
+                market_supply_point_id=market_supply_point_id,
+                day=current_day,
+            )
+            for interval in day_intervals:
+                interval_start = normalize_datetime(interval["start"])
+                interval_end = normalize_datetime(interval["end"])
+                if period_from and interval_end <= normalize_datetime(period_from):
+                    continue
+                if period_to and interval_start > normalize_datetime(period_to):
+                    continue
+                all_intervals.append(interval)
+
+            if progress_callback:
+                progress_callback(len(all_intervals), day_index + 1, total_days, current_day)
+
+        all_intervals.sort(key=lambda item: item["start"])
+        return all_intervals
+
+    def get_meter_reference_readings(
+        self,
+        account_number: str,
+        meter_id: str | int,
+    ) -> list[dict]:
+        """Return reference meter readings from the API for calibration/UI selection."""
+        cursor = None
+        reference_readings: list[dict] = []
+
+        while True:
+            result = self._graphql_request(
+                METER_READINGS_QUERY,
+                {
+                    "accountNumber": account_number,
+                    "meterId": str(meter_id),
+                    "cursor": cursor,
+                },
+            )
+            readings_data = result.get("electricityMeterReadings", {})
+            for edge in readings_data.get("edges", []):
+                node = edge.get("node", {})
+                read_at = node.get("readAt")
+                value = node.get("value")
+                type_of_read = node.get("typeOfRead")
+                if not read_at or value is None or type_of_read not in {"INTERIM", "ESTIMATE"}:
+                    continue
+
+                try:
+                    reference_readings.append(
+                        {
+                            "read_at": normalize_datetime(datetime.fromisoformat(read_at)),
+                            "value": float(value),
+                            "type_of_read": type_of_read,
+                            "origin": node.get("origin"),
+                            "register_obis_code": node.get("registerObisCode"),
+                        }
+                    )
+                except (TypeError, ValueError):
+                    continue
+
+            page_info = readings_data.get("pageInfo", {})
+            if not page_info.get("hasNextPage"):
+                reference_readings.sort(key=lambda item: normalize_datetime(item["read_at"]), reverse=True)
+                return reference_readings
+            cursor = page_info.get("endCursor")
+            if not cursor:
+                reference_readings.sort(key=lambda item: normalize_datetime(item["read_at"]), reverse=True)
+                return reference_readings
+
+    def get_latest_interim_meter_reading(
+        self,
+        account_number: str,
+        meter_id: str | int,
+    ) -> dict | None:
+        """Return the newest actual INTERIM meter reading for cumulative calibration."""
+        for reading in self.get_meter_reference_readings(account_number, meter_id):
+            if reading.get("type_of_read") == "INTERIM":
+                return reading
+        return None
 
     def get_consumption_graphql(self, property_id, period_from=None, period_to=None, fetch_all=False, progress_callback=None):
         """
@@ -1456,9 +1597,12 @@ class OctopusGermanyClient:
                         all_intervals.append({
                             "start": start_time,
                             "end": end_time,
-                            "consumption_kwh": round(float(value), 4),
+                            "consumption_kwh": float(value),
                             "duration_seconds": duration,
-                            "unit": node.get("unit", "kWh")
+                            "unit": node.get("unit", "kWh"),
+                            "api_start": str(start_at),
+                            "api_end": str(end_at),
+                            "api_value": str(value),
                         })
                     except (ValueError, TypeError) as e:
                         self._log_debug(f"Error parsing measurement: {e}")
@@ -1487,9 +1631,16 @@ class OctopusGermanyClient:
         return all_intervals
 
 
-def format_datetime(dt: datetime) -> str:
+def to_local_datetime(dt: datetime) -> datetime:
+    """Convert a datetime to a naive local app-timezone value for display."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc).astimezone(APP_TIMEZONE).replace(tzinfo=None)
+    return dt.astimezone(APP_TIMEZONE).replace(tzinfo=None)
+
+
+def format_datetime(dt: datetime, *, use_local_time: bool = False) -> str:
     """Format datetime for CSV output (European format: DD.MM.YYYY HH:MM:SS)."""
-    dt = normalize_datetime(dt)
+    dt = to_local_datetime(dt) if use_local_time else normalize_datetime(dt)
     return dt.strftime("%d.%m.%Y %H:%M:%S")
 
 
@@ -1501,8 +1652,8 @@ def ensure_app_timezone(dt: datetime) -> datetime:
 
 
 def get_today_start() -> datetime:
-    """Get the start of the current day in the app timezone as a naive datetime."""
-    return datetime.now(APP_TIMEZONE).replace(
+    """Get the start of the current UTC day as a naive datetime."""
+    return datetime.now(timezone.utc).replace(
         hour=0,
         minute=0,
         second=0,
@@ -1512,10 +1663,10 @@ def get_today_start() -> datetime:
 
 
 def normalize_datetime(dt: datetime) -> datetime:
-    """Normalize datetimes to naive Europe/Berlin values for local comparisons and CSV export."""
+    """Normalize datetimes to naive UTC values for storage and comparisons."""
     if dt.tzinfo is None:
         return dt
-    return dt.astimezone(APP_TIMEZONE).replace(tzinfo=None)
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def parse_date(date_str: str) -> datetime:
@@ -1528,18 +1679,67 @@ def parse_datetime(datetime_str: str) -> datetime:
     return datetime.strptime(datetime_str, "%d.%m.%Y %H:%M:%S")
 
 
-def build_readings_with_meter_reading(readings: list) -> list[dict]:
+def _reading_sort_value(raw_value) -> datetime:
+    if isinstance(raw_value, datetime):
+        return normalize_datetime(raw_value)
+    return datetime.fromisoformat(str(raw_value))
+
+
+def _resolve_meter_reading_offset(
+    sorted_readings: list[dict],
+    reference_reading: dict | None = None,
+) -> float:
+    """Return the cumulative offset before the first interval."""
+    if not sorted_readings:
+        return 0.0
+
+    if reference_reading is None:
+        for reading in sorted_readings:
+            existing_value = reading.get("meter_reading_kwh")
+            if existing_value is None:
+                continue
+            try:
+                return float(existing_value) - float(reading["consumption_kwh"])
+            except (TypeError, ValueError, KeyError):
+                continue
+        return 0.0
+
+    reference_time = reference_reading.get("read_at")
+    reference_value = reference_reading.get("value")
+    if not isinstance(reference_time, datetime):
+        return 0.0
+
+    try:
+        anchor_value = float(reference_value)
+    except (TypeError, ValueError):
+        return 0.0
+
+    normalized_reference_time = normalize_datetime(reference_time)
+    consumption_until_anchor = 0.0
+    for reading in sorted_readings:
+        reading_end = _reading_sort_value(reading["end"])
+        if reading_end <= normalized_reference_time:
+            consumption_until_anchor += float(reading["consumption_kwh"])
+        else:
+            break
+
+    return anchor_value - consumption_until_anchor
+
+
+def build_readings_with_meter_reading(
+    readings: list,
+    reference_reading: dict | None = None,
+) -> list[dict]:
     """Return sorted readings enriched with cumulative meter_reading_kwh."""
     sorted_readings = sorted(
         readings,
-        key=lambda reading: (
-            normalize_datetime(reading["start"])
-            if isinstance(reading["start"], datetime)
-            else datetime.fromisoformat(str(reading["start"]))
-        ),
+        key=lambda reading: _reading_sort_value(reading["start"]),
     )
 
-    running_meter_reading = 0.0
+    running_meter_reading = _resolve_meter_reading_offset(
+        sorted_readings,
+        reference_reading=reference_reading,
+    )
     enriched_readings: list[dict] = []
     for reading in sorted_readings:
         consumption_value = float(reading["consumption_kwh"])
@@ -1551,22 +1751,44 @@ def build_readings_with_meter_reading(readings: list) -> list[dict]:
     return enriched_readings
 
 
-def convert_readings_for_export(readings: list) -> list:
+def convert_readings_for_export(
+    readings: list,
+    reference_reading: dict | None = None,
+    *,
+    use_local_time: bool = False,
+) -> list:
     """Convert readings to serializable format for JSON/YAML export."""
     export_data = []
-    for reading in build_readings_with_meter_reading(readings):
+    for reading in build_readings_with_meter_reading(readings, reference_reading=reference_reading):
         export_data.append({
-            'start': reading['start'].isoformat() if isinstance(reading['start'], datetime) else reading['start'],
-            'end': reading['end'].isoformat() if isinstance(reading['end'], datetime) else reading['end'],
+            'start': (
+                to_local_datetime(reading['start']).isoformat()
+                if isinstance(reading['start'], datetime) and use_local_time
+                else reading['start'].isoformat() if isinstance(reading['start'], datetime) else reading['start']
+            ),
+            'end': (
+                to_local_datetime(reading['end']).isoformat()
+                if isinstance(reading['end'], datetime) and use_local_time
+                else reading['end'].isoformat() if isinstance(reading['end'], datetime) else reading['end']
+            ),
             'consumption_kwh': reading['consumption_kwh'],
             'meter_reading_kwh': reading['meter_reading_kwh'],
             'duration_seconds': reading.get('duration_seconds'),
-            'unit': reading.get('unit', 'kWh')
+            'unit': reading.get('unit', 'kWh'),
+            'api_start': reading.get('api_start'),
+            'api_end': reading.get('api_end'),
+            'api_value': reading.get('api_value'),
         })
     return export_data
 
 
-def save_to_json(readings: list, output_path: Path) -> bool:
+def save_to_json(
+    readings: list,
+    output_path: Path,
+    reference_reading: dict | None = None,
+    *,
+    use_local_time: bool = False,
+) -> bool:
     """Save readings to JSON format."""
     try:
         export_data = {
@@ -1575,7 +1797,11 @@ def save_to_json(readings: list, output_path: Path) -> bool:
                 'total_readings': len(readings),
                 'source': 'Octopus Energy Germany Smart Meter'
             },
-            'readings': convert_readings_for_export(readings)
+            'readings': convert_readings_for_export(
+                readings,
+                reference_reading=reference_reading,
+                use_local_time=use_local_time,
+            )
         }
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(export_data, f, indent=2, ensure_ascii=False)
@@ -1585,7 +1811,13 @@ def save_to_json(readings: list, output_path: Path) -> bool:
         return False
 
 
-def save_to_yaml(readings: list, output_path: Path) -> bool:
+def save_to_yaml(
+    readings: list,
+    output_path: Path,
+    reference_reading: dict | None = None,
+    *,
+    use_local_time: bool = False,
+) -> bool:
     """Save readings to YAML format."""
     try:
         export_data = {
@@ -1594,7 +1826,11 @@ def save_to_yaml(readings: list, output_path: Path) -> bool:
                 'total_readings': len(readings),
                 'source': 'Octopus Energy Germany Smart Meter'
             },
-            'readings': convert_readings_for_export(readings)
+            'readings': convert_readings_for_export(
+                readings,
+                reference_reading=reference_reading,
+                use_local_time=use_local_time,
+            )
         }
         with open(output_path, 'w', encoding='utf-8') as f:
             yaml.dump(export_data, f, allow_unicode=True, sort_keys=False)
@@ -1827,11 +2063,25 @@ def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
                         end = normalize_datetime(datetime.fromisoformat(row['end']))
                     consumption = float(row['consumption_kwh'])
                     
-                    existing_data.append({
+                    reading = {
                         'start': start,
                         'end': end,
                         'consumption_kwh': consumption
-                    })
+                    }
+                    if "T" in row['start']:
+                        reading['api_start'] = row['start']
+                    if "T" in row['end']:
+                        reading['api_end'] = row['end']
+                    if row.get('consumption_kwh') not in (None, ''):
+                        reading['api_value'] = row['consumption_kwh']
+                    meter_reading = row.get('meter_reading_kwh')
+                    if meter_reading not in (None, ''):
+                        try:
+                            reading['meter_reading_kwh'] = float(meter_reading)
+                        except ValueError:
+                            pass
+
+                    existing_data.append(reading)
                     
                     if latest_interval_end is None or end > latest_interval_end:
                         latest_interval_end = end
@@ -1850,9 +2100,127 @@ def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
         return [], None
 
 
+def read_existing_json(json_path: Path) -> tuple[list, datetime | None]:
+    """Read cached readings.json and return data plus latest interval end."""
+    if not json_path.exists():
+        return [], None
+
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except Exception as e:
+        print(f"Error reading existing JSON: {e}")
+        return [], None
+
+    raw_readings = payload.get('readings', []) if isinstance(payload, dict) else []
+    existing_data = []
+    latest_interval_end = None
+
+    for row in raw_readings:
+        try:
+            start = normalize_datetime(datetime.fromisoformat(row['start']))
+            end = normalize_datetime(datetime.fromisoformat(row['end']))
+            reading = {
+                'start': start,
+                'end': end,
+                'consumption_kwh': float(row['consumption_kwh']),
+            }
+            if row.get('api_start'):
+                reading['api_start'] = str(row['api_start'])
+            if row.get('api_end'):
+                reading['api_end'] = str(row['api_end'])
+            if row.get('api_value') not in (None, ''):
+                reading['api_value'] = str(row['api_value'])
+            meter_reading = row.get('meter_reading_kwh')
+            if meter_reading not in (None, ''):
+                reading['meter_reading_kwh'] = float(meter_reading)
+            existing_data.append(reading)
+            if latest_interval_end is None or end > latest_interval_end:
+                latest_interval_end = end
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    print(f"Read {len(existing_data)} existing readings from {json_path}")
+    if latest_interval_end:
+        print(f"Latest interval end in JSON: {latest_interval_end}")
+
+    return existing_data, latest_interval_end
+
+
+def write_readings_json(readings: list[dict], json_path: Path) -> bool:
+    """Persist calibrated readings to the internal JSON cache."""
+    try:
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+    try:
+        export_data = {
+            'metadata': {
+                'export_date': datetime.now().isoformat(),
+                'total_readings': len(readings),
+                'source': 'Octopus Energy Germany Smart Meter',
+            },
+            'readings': convert_readings_for_export(readings),
+        }
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        print(f"Fehler beim Speichern als readings.json: {e}")
+        return False
+
+
+def write_consumption_csv(readings: list[dict], csv_path: Path) -> bool:
+    """Persist readings as API-style CSV with raw timestamps and value precision."""
+    try:
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+    try:
+        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['start', 'end', 'consumption_kwh', 'meter_reading_kwh'])
+            for reading in readings:
+                writer.writerow([
+                    reading.get('api_start')
+                    or (reading['start'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['start'], datetime) else reading['start']),
+                    reading.get('api_end')
+                    or (reading['end'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['end'], datetime) else reading['end']),
+                    reading.get('api_value')
+                    or str(reading['consumption_kwh']),
+                    reading['meter_reading_kwh'],
+                ])
+        return True
+    except Exception as e:
+        print(f"Fehler beim Speichern als consumption.csv: {e}")
+        return False
+
+
+def consumption_csv_has_api_format(csv_path: Path) -> bool:
+    """Return True when consumption.csv stores timestamps in API-style ISO format."""
+    if not csv_path.exists():
+        return False
+
+    try:
+        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            first_row = next(reader, None)
+    except Exception:
+        return False
+
+    if not first_row:
+        return False
+
+    start_value = str(first_row.get('start', ''))
+    end_value = str(first_row.get('end', ''))
+    return 'T' in start_value and ('+' in start_value or start_value.endswith('Z')) and 'T' in end_value
+
+
 def migrate_consumption_csv_to_config() -> Path:
     """Move any legacy Documents consumption.csv into the config folder."""
-    config_csv = get_app_config_folder() / "consumption.csv"
+    config_csv = get_default_output_path()
     legacy_csv = get_smartmeter_data_folder() / "consumption.csv"
 
     try:
@@ -1870,14 +2238,14 @@ def migrate_consumption_csv_to_config() -> Path:
             pass
         return config_csv
 
+    legacy_data, _ = read_existing_csv(legacy_csv)
+    if legacy_data:
+        write_readings_json(legacy_data, config_csv)
+
     try:
-        os.replace(legacy_csv, config_csv)
+        legacy_csv.unlink()
     except OSError:
-        try:
-            shutil.copy2(legacy_csv, config_csv)
-            legacy_csv.unlink()
-        except OSError:
-            pass
+        pass
 
     return config_csv
 
@@ -1890,49 +2258,54 @@ def load_existing_consumption_data() -> tuple[list, datetime | None]:
         Tuple of (readings, latest_interval_end)
     """
     config_csv = migrate_consumption_csv_to_config()
-    return read_existing_csv(config_csv)
+    return read_existing_json(config_csv)
 
 
-def merge_and_save_csv(all_data: list, csv_path: Path):
-    """
-    Merge all data, remove duplicates, sort by time, and save to CSV.
-    
-    Args:
-        all_data: List of all readings (existing + new)
-        csv_path: Path to save CSV
-    """
+def merge_readings(all_data: list, reference_reading: dict | None = None) -> list[dict]:
+    """Merge all data, remove duplicates, sort by time, and calibrate readings."""
     if not all_data:
-        print("Keine Daten zum Speichern")
-        return
-    
-    # Remove duplicates based on start time (keep last occurrence)
+        return []
+
     seen = {}
     for reading in all_data:
         key = reading['start'].isoformat()
         seen[key] = reading
-    
-    # Convert back to list and sort
+
     unique_data = list(seen.values())
     unique_data.sort(key=lambda x: x['start'])
-    export_rows = build_readings_with_meter_reading(unique_data)
-    
-    # Write to CSV
-    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(['start', 'end', 'consumption_kwh', 'meter_reading_kwh'])
-        
-        for reading in export_rows:
-            writer.writerow([
-                format_datetime(reading['start']),
-                format_datetime(reading['end']),
-                reading['consumption_kwh'],
-                reading['meter_reading_kwh'],
-            ])
-    
-    print(f"{len(unique_data)} Einträge gespeichert nach {csv_path}")
+    return build_readings_with_meter_reading(unique_data, reference_reading=reference_reading)
 
 
-def save_data(all_data: list, output_path: Path, output_format: str = "csv"):
+def readings_changed(existing_readings: list[dict], merged_readings: list[dict]) -> bool:
+    """Return True when the cached readings are empty or differ from merged data."""
+    if not existing_readings:
+        return bool(merged_readings)
+    if len(existing_readings) != len(merged_readings):
+        return True
+
+    for current, merged in zip(existing_readings, merged_readings):
+        current_start = normalize_datetime(current['start'])
+        merged_start = normalize_datetime(merged['start'])
+        current_end = normalize_datetime(current['end'])
+        merged_end = normalize_datetime(merged['end'])
+        if current_start != merged_start:
+            return True
+        if current_end != merged_end:
+            return True
+        if float(current['consumption_kwh']) != float(merged['consumption_kwh']):
+            return True
+
+    return False
+
+
+def save_data(
+    all_data: list,
+    output_path: Path,
+    output_format: str = "csv",
+    reference_reading: dict | None = None,
+    *,
+    use_local_time: bool = False,
+):
     """
     Save data to the specified format.
     
@@ -1954,7 +2327,7 @@ def save_data(all_data: list, output_path: Path, output_format: str = "csv"):
     # Convert back to list and sort
     unique_data = list(seen.values())
     unique_data.sort(key=lambda x: x['start'] if isinstance(x['start'], datetime) else datetime.fromisoformat(x['start']))
-    export_rows = build_readings_with_meter_reading(unique_data)
+    export_rows = build_readings_with_meter_reading(unique_data, reference_reading=reference_reading)
     
     if output_format == "csv":
         # Change extension to .csv
@@ -1964,8 +2337,8 @@ def save_data(all_data: list, output_path: Path, output_format: str = "csv"):
             writer.writerow(['start', 'end', 'consumption_kwh', 'meter_reading_kwh'])
             for reading in export_rows:
                 writer.writerow([
-                    format_datetime(reading['start']) if isinstance(reading['start'], datetime) else reading['start'],
-                    format_datetime(reading['end']) if isinstance(reading['end'], datetime) else reading['end'],
+                    format_datetime(reading['start'], use_local_time=use_local_time) if isinstance(reading['start'], datetime) else reading['start'],
+                    format_datetime(reading['end'], use_local_time=use_local_time) if isinstance(reading['end'], datetime) else reading['end'],
                     reading['consumption_kwh'],
                     reading['meter_reading_kwh'],
                 ])
@@ -1974,14 +2347,24 @@ def save_data(all_data: list, output_path: Path, output_format: str = "csv"):
     
     elif output_format == "json":
         json_path = output_path.with_suffix('.json')
-        if save_to_json(unique_data, json_path):
+        if save_to_json(
+            unique_data,
+            json_path,
+            reference_reading=reference_reading,
+            use_local_time=use_local_time,
+        ):
             print(f"{len(unique_data)} Einträge als JSON gespeichert nach {json_path}")
             return True
         return False
     
     elif output_format == "yaml":
         yaml_path = output_path.with_suffix('.yaml')
-        if save_to_yaml(unique_data, yaml_path):
+        if save_to_yaml(
+            unique_data,
+            yaml_path,
+            reference_reading=reference_reading,
+            use_local_time=use_local_time,
+        ):
             print(f"{len(unique_data)} Einträge als YAML gespeichert nach {yaml_path}")
             return True
         return False
@@ -2116,6 +2499,8 @@ def main():
         except OSError:
             pass
     existing_data, latest_interval_end = load_existing_consumption_data()
+    consumption_csv_path = get_default_consumption_csv_path()
+    csv_needs_api_refresh = existing_data and not consumption_csv_has_api_format(consumption_csv_path)
     
     # Determine date range for fetching new data
     # Never fetch data for the current day (data may be incomplete)
@@ -2152,10 +2537,18 @@ def main():
             need_to_fetch = False
             # Reset fetch_from since we don't need to fetch
             fetch_from = None
+    if csv_needs_api_refresh and existing_data:
+        need_to_fetch = True
+        fetch_from = min(reading["start"] for reading in existing_data)
+        print("\nconsumption.csv verwendet noch nicht das API-Format. Lade Daten neu fuer den CSV-Cache.")
     
     # Initialize client and authenticate only if we need to fetch
     client = None
     property_id = args.property_id
+    account_number = args.account_number
+    meter_id = args.meter_id
+    malo_number = None
+    reference_reading = None
     
     if need_to_fetch:
         client = OctopusGermanyClient(args.email, args.password, debug=args.debug)
@@ -2168,7 +2561,6 @@ def main():
         print("Authentication successful!")
         
         # Auto-discover account number if not provided
-        account_number = args.account_number
         if not account_number:
             print("\nDiscovering account number...")
             accounts = client.get_accounts_from_viewer()
@@ -2183,12 +2575,16 @@ def main():
             account_number = accounts[0].get('number')
             print(f"Gefundene Kundennummer: {account_number}")
         
-        # Get meter ID if not provided
-        if not property_id:
+        # Get meter / MaLo details for GetSmartUsage
+        if not property_id or not malo_number:
             print("\nDiscovering smart meter...")
             meter_info = client.find_smart_meter(account_number)
             if meter_info:
-                malo_number, meter_id, property_id = meter_info
+                discovered_malo_number, discovered_meter_id, discovered_property_id = meter_info
+                malo_number = discovered_malo_number
+                meter_id = discovered_meter_id
+                if not property_id:
+                    property_id = discovered_property_id
                 print(f"Verwende Zähler-ID: {meter_id}")
                 print(f"Verwende Eigenschafts-ID: {property_id}")
             else:
@@ -2202,6 +2598,15 @@ def main():
     # Fetch consumption data only if needed
     new_readings = []
     if need_to_fetch:
+        if account_number and meter_id:
+            reference_reading = client.get_latest_interim_meter_reading(account_number, meter_id)
+            if reference_reading:
+                print(
+                    "Verwende INTERIM-Zaehlerstand als Referenz: "
+                    f"{reference_reading['value']:.3f} kWh "
+                    f"am {format_datetime(reference_reading['read_at'])}"
+                )
+
         print("\nFetching consumption data...")
         if fetch_from or fetch_to:
             print(f"Datumsbereich: {fetch_from or 'alle'} bis {fetch_to or 'alle'}")
@@ -2237,7 +2642,7 @@ def main():
         total_kwh = sum(r["consumption_kwh"] for r in new_readings)
         print(f"Gesamtverbrauch neuer Daten: {total_kwh:.2f} kWh")
     else:
-        print("\nEs wurden keine neuen Daten gefunden (alles bereits in der CSV enthalten)")
+        print("\nEs wurden keine neuen Daten gefunden (alles bereits im Cache enthalten)")
     
     # Merge existing and new data
     all_readings = existing_data + new_readings
@@ -2248,24 +2653,36 @@ def main():
     
     # Remove duplicates and save
     print(f"\nFasse Daten zusammen: {len(existing_data)} existierende + {len(new_readings)} neue = {len(all_readings)} total")
-    
-    # Always keep the merged consumption.csv in the app config folder
-    config_csv_path = get_default_output_path()
-    merge_and_save_csv(all_readings, config_csv_path)
 
-    # Read back the merged data (now deduplicated and sorted)
-    final_data, _ = read_existing_csv(config_csv_path)
+    config_cache_path = get_default_output_path()
+    final_data = merge_readings(all_readings, reference_reading=reference_reading)
+    if readings_changed(existing_data, final_data):
+        if not write_readings_json(final_data, config_cache_path):
+            print("Fehler beim Speichern von readings.json")
+            sys.exit(1)
+        if not write_consumption_csv(final_data, consumption_csv_path):
+            print("Fehler beim Speichern von consumption.csv")
+            sys.exit(1)
+        print(f"{len(final_data)} Eintraege gespeichert nach {config_cache_path}")
+        print(f"{len(final_data)} Eintraege gespeichert nach {consumption_csv_path}")
+    elif csv_needs_api_refresh:
+        if not write_consumption_csv(final_data, consumption_csv_path):
+            print("Fehler beim Speichern von consumption.csv")
+            sys.exit(1)
+        print(f"{len(final_data)} Eintraege gespeichert nach {consumption_csv_path}")
+    else:
+        print(f"Keine neuen Daten fuer {config_cache_path.name}; Cache bleibt unveraendert.")
 
     # Optional extra export only when explicitly requested
     output_format = args.output_format
     if output_path is not None:
-        save_data(final_data, output_path, output_format)
+        save_data(final_data, output_path, output_format, reference_reading=reference_reading)
     
     # Show data summary
     print(f"\nInsgesamt: {len(final_data)} Verbrauchsdaten")
     if final_data:
         total_kwh = sum(r["consumption_kwh"] for r in final_data)
-        print(f"Gesamtverbrauch in CSV: {total_kwh:.2f} kWh")
+        print(f"Gesamtverbrauch im Cache: {total_kwh:.2f} kWh")
         
         # Show data granularity
         if len(final_data) > 1:
@@ -2293,7 +2710,8 @@ def main():
     
     print("\n" + "="*60)
     print("Daten erfolgreich geschrieben nach:")
-    print(f"  - App-CSV: {config_csv_path}")
+    print(f"  - readings.json: {config_cache_path}")
+    print(f"  - consumption.csv: {consumption_csv_path}")
     if output_path is not None and output_format == "csv":
         print(f"  - Zusatz-CSV: {output_path.with_suffix('.csv')}")
     elif output_path is not None and output_format == "json":

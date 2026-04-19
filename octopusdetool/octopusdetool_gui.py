@@ -20,7 +20,7 @@ import platform
 import sys
 import traceback
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import TypeVar
 
@@ -36,8 +36,10 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
     QFileDialog,
+    QFormLayout,
     QFrame,
     QHeaderView,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -78,6 +80,7 @@ from octopusdetool.octopusdetool import (
     fill_excel_template,
     format_datetime,
     get_default_excel_path,
+    get_default_consumption_csv_path,
     get_default_tariff_settings_for_type,
     get_default_output_path,
     get_app_config_folder,
@@ -85,10 +88,16 @@ from octopusdetool.octopusdetool import (
     init_app_config_folder,
     load_excel_tariff_settings,
     load_existing_consumption_data,
+    merge_readings,
     normalize_datetime,
+    readings_changed,
+    consumption_csv_has_api_format,
     save_to_json,
     save_to_yaml,
+    to_local_datetime,
     build_readings_with_meter_reading,
+    write_consumption_csv,
+    write_readings_json,
 )
 
 
@@ -106,6 +115,9 @@ TARIFF_RATES_CONFIG_KEY = "tariff_rates"
 EXCEL_EXPORT_SUPPORTED_CONFIG_KEY = "excel_export_supported"
 EXCEL_EXPORT_REASON_CONFIG_KEY = "excel_export_reason"
 DEBUG_LOG_FILE_CONFIG_KEY = "debug_log_file"
+REFERENCE_READINGS_CONFIG_KEY = "reference_readings"
+SELECTED_REFERENCE_ID_CONFIG_KEY = "selected_reference_id"
+USE_LOCAL_TIME_CONFIG_KEY = "use_local_time"
 OUTPUT_EXTENSIONS = {
     "excel": ".xlsx",
     "csv": ".csv",
@@ -555,6 +567,7 @@ class OctopusSmartMeterGUI:
         self._replace_data_tab_checkboxes()
         self._replace_currency_toggle()
         self._setup_analysis_widgets()
+        self._setup_reference_readings_widgets()
         self._setup_view_calendar_popup()
         self._setup_range_calendar_popup()
         self._apply_popup_styling()
@@ -577,8 +590,12 @@ class OctopusSmartMeterGUI:
         self.template_path = get_default_excel_path(self.current_tariff_type)
         self.default_tariff_settings = load_excel_tariff_settings(self.template_path)
         self.csv_path = get_default_output_path()
+        self.consumption_csv_path = get_default_consumption_csv_path()
         self.existing_data: list[dict] = []
         self.latest_timestamp: datetime | None = None
+        self.reference_readings: list[dict] = []
+        self.selected_reference_id: str | None = None
+        self._reference_table_updating = False
         self.last_output_format = "excel"
         self._analysis_date_initialized = False
 
@@ -650,6 +667,11 @@ class OctopusSmartMeterGUI:
         self.missing_entries_table_view = self._find_widget(QTableView, "missingEntriesTableView")
         self.save_settings_button = self._find_widget(QPushButton, "saveSettingsButton")
         self.config_path_line_edit = self._find_widget(QLineEdit, "configPathLineEdit")
+        self.tariff_frame = self._find_widget(QWidget, "tariffFrame")
+        settings_form = self.tariff_frame.layout()
+        if not isinstance(settings_form, QFormLayout):
+            raise RuntimeError("Settings form layout was not found")
+        self.settings_form_layout = settings_form
 
         self.view_mode_combo = self._find_widget(QComboBox, "viewModeComboBox")
         self.view_date_edit = self._find_widget(QDateEdit, "viewDateEdit")
@@ -752,6 +774,52 @@ class OctopusSmartMeterGUI:
         self.analysis_table_view.customContextMenuRequested.connect(
             self._show_analysis_table_context_menu
         )
+
+    def _setup_reference_readings_widgets(self) -> None:
+        self.reference_readings_label = QLabel("Referenz-Stromzaehlerwert:")
+        self.reference_readings_label.setObjectName("referenceReadingsLabel")
+        self.reference_readings_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+
+        self.reference_readings_container = QWidget(self.window)
+        container_layout = QVBoxLayout(self.reference_readings_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(8)
+
+        self.reference_readings_table_view = QTableView(self.reference_readings_container)
+        self.reference_readings_table_view.setObjectName("referenceReadingsTableView")
+        self.reference_readings_table_model = QStandardItemModel(self.reference_readings_table_view)
+        self.reference_readings_table_model.setHorizontalHeaderLabels(
+            ["Aktiv", "Datum + Stunde", "Wert (kWh)", "Typ"]
+        )
+        self.reference_readings_table_view.setModel(self.reference_readings_table_model)
+        self.reference_readings_table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.reference_readings_table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.reference_readings_table_view.setAlternatingRowColors(True)
+        self.reference_readings_table_view.verticalHeader().hide()
+        self.reference_readings_table_view.horizontalHeader().setStretchLastSection(True)
+        container_layout.addWidget(self.reference_readings_table_view)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        self.add_reference_button = QPushButton("Benutzerwert hinzufuegen", self.reference_readings_container)
+        self.remove_reference_button = QPushButton("Benutzerwert loeschen", self.reference_readings_container)
+        button_row.addWidget(self.add_reference_button)
+        button_row.addWidget(self.remove_reference_button)
+        button_row.addStretch(1)
+        container_layout.addLayout(button_row)
+
+        self.settings_form_layout.addRow(
+            self.reference_readings_label,
+            self.reference_readings_container,
+        )
+
+        self.use_local_time_checkbox = StatusIndicatorCheckBox(self.window)
+        self.use_local_time_checkbox.setObjectName("useLocalTimeCheckBox")
+        self.use_local_time_checkbox.setText("Lokalzeit anstatt UTC-Zeit verwenden")
+        self.use_local_time_checkbox.setChecked(True)
+        self.settings_form_layout.addRow(QLabel("Zeitdarstellung:"), self.use_local_time_checkbox)
 
     def _setup_view_calendar_popup(self) -> None:
         self.view_calendar_popup = ViewCalendarPopup(self.window)
@@ -859,10 +927,27 @@ QDateEdit::drop-down {{
         self.missing_entries_table_view.customContextMenuRequested.connect(
             self._show_missing_entries_table_context_menu
         )
+        self.reference_readings_table_view.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.SelectedClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+        )
+        self.reference_readings_table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.reference_readings_table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.reference_readings_table_view.setAlternatingRowColors(True)
+        self.reference_readings_table_view.verticalHeader().hide()
+        self.reference_readings_table_view.horizontalHeader().setStretchLastSection(True)
+        self.reference_readings_table_model.itemChanged.connect(self._on_reference_table_item_changed)
 
     def _configure_primary_buttons(self) -> None:
         primary_button_stylesheet = _build_primary_button_stylesheet()
-        for button in (self.fetch_data_button, self.save_settings_button, self.export_existing_button):
+        for button in (
+            self.fetch_data_button,
+            self.save_settings_button,
+            self.export_existing_button,
+            self.add_reference_button,
+            self.remove_reference_button,
+        ):
             button.setStyleSheet(primary_button_stylesheet)
 
     def _configure_tooltip_palette(self) -> None:
@@ -1082,6 +1167,9 @@ QDateEdit::drop-down {{
         self.tariff_high_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
         self.base_price_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
         self.save_settings_button.clicked.connect(self._save_settings_from_tab)
+        self.add_reference_button.clicked.connect(self._add_custom_reference_reading)
+        self.remove_reference_button.clicked.connect(self._remove_selected_custom_reference_reading)
+        self.use_local_time_checkbox.toggled.connect(self._on_use_local_time_toggled)
         self.view_mode_combo.currentIndexChanged.connect(self._on_view_mode_changed)
         self.view_calendar_button.clicked.connect(self._open_view_calendar_popup)
         self.view_date_edit.dateChanged.connect(lambda _date: self._refresh_analysis_view())
@@ -1390,6 +1478,298 @@ QDateEdit::drop-down {{
 
     def _show_info(self, message: str) -> None:
         QMessageBox.information(self.window, "Erfolg", message)
+
+    def _parse_reference_datetime(self, raw_value: str | datetime) -> datetime:
+        if isinstance(raw_value, datetime):
+            return normalize_datetime(raw_value)
+
+        text = str(raw_value).strip()
+        for fmt in ("%d.%m.%Y %H:%M", "%d.%m.%Y %H:%M:%S"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                if self.use_local_time_checkbox.isChecked():
+                    return parsed.replace(tzinfo=APP_TIMEZONE).astimezone(timezone.utc).replace(tzinfo=None)
+                return parsed
+            except ValueError:
+                continue
+        return normalize_datetime(datetime.fromisoformat(text))
+
+    def _display_datetime(self, raw_value: datetime) -> datetime:
+        normalized = normalize_datetime(raw_value)
+        if self.use_local_time_checkbox.isChecked():
+            return to_local_datetime(normalized)
+        return normalized
+
+    def _on_use_local_time_toggled(self, _checked: bool) -> None:
+        self._refresh_reference_readings_table()
+        self._update_settings_data_summary()
+        self._set_default_analysis_date(force=True)
+        self._refresh_analysis_view()
+        self.save_config(force=True)
+
+    def _normalize_reference_reading(self, reading: dict, *, fallback_id: str) -> dict:
+        normalized = {
+            "id": str(reading.get("id") or fallback_id),
+            "read_at": self._parse_reference_datetime(reading.get("read_at", datetime.now())),
+            "value": float(reading.get("value", 0.0)),
+            "type_of_read": str(reading.get("type_of_read", "INTERIM")).upper(),
+        }
+        if normalized["type_of_read"] not in {"INTERIM", "ESTIMATE", "USER-CUSTOM"}:
+            normalized["type_of_read"] = "INTERIM"
+        return normalized
+
+    def _serialize_reference_readings(self) -> list[dict]:
+        serialized: list[dict] = []
+        for index, reading in enumerate(self.reference_readings):
+            normalized = self._normalize_reference_reading(reading, fallback_id=f"reference-{index}")
+            serialized.append(
+                {
+                    "id": normalized["id"],
+                    "read_at": normalized["read_at"].isoformat(),
+                    "value": normalized["value"],
+                    "type_of_read": normalized["type_of_read"],
+                }
+            )
+        return serialized
+
+    def _deserialize_reference_readings(self, raw_readings) -> list[dict]:
+        if not isinstance(raw_readings, list):
+            return []
+        deserialized: list[dict] = []
+        for index, reading in enumerate(raw_readings):
+            if not isinstance(reading, dict):
+                continue
+            try:
+                deserialized.append(
+                    self._normalize_reference_reading(reading, fallback_id=f"reference-{index}")
+                )
+            except (TypeError, ValueError):
+                continue
+        deserialized.sort(key=lambda item: normalize_datetime(item["read_at"]), reverse=True)
+        return deserialized
+
+    def _reference_sort_key(self, reading: dict) -> tuple[datetime, str]:
+        return normalize_datetime(reading["read_at"]), reading["type_of_read"]
+
+    def _merge_reference_readings(self, api_readings: list[dict]) -> None:
+        merged: dict[str, dict] = {}
+        for reading in self.reference_readings:
+            normalized = self._normalize_reference_reading(reading, fallback_id=reading.get("id", "saved"))
+            if normalized["type_of_read"] == "USER-CUSTOM":
+                merged[normalized["id"]] = normalized
+
+        for index, reading in enumerate(api_readings):
+            normalized = self._normalize_reference_reading(
+                {
+                    "id": f"api-{reading.get('type_of_read', 'INTERIM')}-{reading.get('read_at')}-{reading.get('value')}",
+                    "read_at": reading.get("read_at"),
+                    "value": reading.get("value"),
+                    "type_of_read": reading.get("type_of_read"),
+                },
+                fallback_id=f"api-{index}",
+            )
+            merged[normalized["id"]] = normalized
+
+        self.reference_readings = sorted(
+            merged.values(),
+            key=self._reference_sort_key,
+            reverse=True,
+        )
+
+        if self.selected_reference_id and any(
+            reading["id"] == self.selected_reference_id for reading in self.reference_readings
+        ):
+            pass
+        else:
+            selected = next(
+                (reading for reading in self.reference_readings if reading["type_of_read"] == "INTERIM"),
+                self.reference_readings[0] if self.reference_readings else None,
+            )
+            self.selected_reference_id = selected["id"] if selected else None
+
+        self._refresh_reference_readings_table()
+
+    def _refresh_reference_readings_table(self) -> None:
+        if self.selected_reference_id not in {reading["id"] for reading in self.reference_readings}:
+            selected = next(
+                (reading for reading in self.reference_readings if reading["type_of_read"] == "INTERIM"),
+                self.reference_readings[0] if self.reference_readings else None,
+            )
+            self.selected_reference_id = selected["id"] if selected else None
+
+        self._reference_table_updating = True
+        try:
+            self.reference_readings_table_model.clear()
+            self.reference_readings_table_model.setHorizontalHeaderLabels(
+                ["Aktiv", "Datum + Stunde", "Wert (kWh)", "Typ"]
+            )
+            for reading in sorted(self.reference_readings, key=self._reference_sort_key, reverse=True):
+                reading_id = reading["id"]
+                reading_type = reading["type_of_read"]
+                editable = reading_type == "USER-CUSTOM"
+
+                active_item = QStandardItem()
+                active_item.setCheckable(True)
+                active_item.setEditable(False)
+                active_item.setData(reading_id, Qt.ItemDataRole.UserRole)
+                active_item.setCheckState(
+                    Qt.CheckState.Checked
+                    if reading_id == self.selected_reference_id
+                    else Qt.CheckState.Unchecked
+                )
+
+                date_item = QStandardItem(self._display_datetime(reading["read_at"]).strftime("%d.%m.%Y %H:%M"))
+                date_item.setData(reading_id, Qt.ItemDataRole.UserRole)
+                date_item.setEditable(editable)
+
+                value_item = QStandardItem(f"{float(reading['value']):.3f}")
+                value_item.setData(reading_id, Qt.ItemDataRole.UserRole)
+                value_item.setEditable(editable)
+                value_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+                type_item = QStandardItem(reading_type)
+                type_item.setData(reading_id, Qt.ItemDataRole.UserRole)
+                type_item.setEditable(False)
+
+                self.reference_readings_table_model.appendRow(
+                    [active_item, date_item, value_item, type_item]
+                )
+
+            header = self.reference_readings_table_view.horizontalHeader()
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        finally:
+            self._reference_table_updating = False
+
+    def _get_selected_reference_reading(self) -> dict | None:
+        for reading in self.reference_readings:
+            if reading["id"] == self.selected_reference_id:
+                return {
+                    "read_at": normalize_datetime(reading["read_at"]),
+                    "value": float(reading["value"]),
+                    "type_of_read": reading["type_of_read"],
+                }
+        return None
+
+    def _rebuild_existing_data_with_selected_reference(self, *, persist_cache: bool) -> None:
+        if not self.existing_data:
+            return
+
+        base_readings = [
+            {
+                "start": normalize_datetime(reading["start"]),
+                "end": normalize_datetime(reading["end"]),
+                "consumption_kwh": float(reading["consumption_kwh"]),
+                "api_start": reading.get("api_start"),
+                "api_end": reading.get("api_end"),
+                "api_value": reading.get("api_value"),
+            }
+            for reading in self.existing_data
+        ]
+        self.existing_data = build_readings_with_meter_reading(
+            base_readings,
+            reference_reading=self._get_selected_reference_reading(),
+        )
+        self.latest_timestamp = max(
+            (normalize_datetime(reading["end"]) for reading in self.existing_data),
+            default=None,
+        )
+        if persist_cache:
+            write_readings_json(self.existing_data, self.csv_path)
+            write_consumption_csv(self.existing_data, self.consumption_csv_path)
+        self._update_settings_data_summary()
+        self._refresh_analysis_view()
+
+    def _on_reference_table_item_changed(self, item: QStandardItem) -> None:
+        if self._reference_table_updating:
+            return
+
+        reading_id = item.data(Qt.ItemDataRole.UserRole)
+        row = item.row()
+        if item.column() == 0:
+            if item.checkState() != Qt.CheckState.Checked:
+                return
+            self.selected_reference_id = str(reading_id)
+            for other_row in range(self.reference_readings_table_model.rowCount()):
+                if other_row == row:
+                    continue
+                other_item = self.reference_readings_table_model.item(other_row, 0)
+                if other_item is None:
+                    continue
+                self._reference_table_updating = True
+                other_item.setCheckState(Qt.CheckState.Unchecked)
+                self._reference_table_updating = False
+            self._rebuild_existing_data_with_selected_reference(persist_cache=True)
+            self.save_config(force=True)
+            return
+
+        if item.column() not in {1, 2}:
+            return
+
+        reading = next((entry for entry in self.reference_readings if entry["id"] == reading_id), None)
+        if not reading or reading["type_of_read"] != "USER-CUSTOM":
+            return
+
+        try:
+            if item.column() == 1:
+                reading["read_at"] = self._parse_reference_datetime(item.text())
+            else:
+                reading["value"] = float(item.text().replace(",", "."))
+        except (TypeError, ValueError):
+            self._show_error("Benutzerwerte muessen ein gueltiges Datum und einen gueltigen Zaehlerstand enthalten.")
+            self._refresh_reference_readings_table()
+            return
+
+        self.reference_readings.sort(key=self._reference_sort_key, reverse=True)
+        self._refresh_reference_readings_table()
+        if reading["id"] == self.selected_reference_id:
+            self._rebuild_existing_data_with_selected_reference(persist_cache=True)
+        self.save_config(force=True)
+
+    def _add_custom_reference_reading(self) -> None:
+        timestamp = datetime.now().replace(minute=0, second=0, microsecond=0)
+        reading_id = f"user-custom-{int(datetime.now().timestamp() * 1000)}"
+        self.reference_readings.append(
+            {
+                "id": reading_id,
+                "read_at": timestamp,
+                "value": 0.0,
+                "type_of_read": "USER-CUSTOM",
+            }
+        )
+        self.reference_readings.sort(key=self._reference_sort_key, reverse=True)
+        should_activate = self.selected_reference_id is None
+        if should_activate:
+            self.selected_reference_id = reading_id
+        self._refresh_reference_readings_table()
+        if should_activate:
+            self._rebuild_existing_data_with_selected_reference(persist_cache=True)
+        self.save_config(force=True)
+
+    def _remove_selected_custom_reference_reading(self) -> None:
+        current_index = self.reference_readings_table_view.currentIndex()
+        if not current_index.isValid():
+            self._show_error("Bitte waehlen Sie zuerst einen Benutzerwert in der Referenztabelle aus.")
+            return
+
+        reading_id = self.reference_readings_table_model.item(current_index.row(), 0).data(Qt.ItemDataRole.UserRole)
+        reading = next((entry for entry in self.reference_readings if entry["id"] == reading_id), None)
+        if not reading or reading["type_of_read"] != "USER-CUSTOM":
+            self._show_error("Nur USER-CUSTOM Eintraege koennen geloescht werden.")
+            return
+
+        self.reference_readings = [entry for entry in self.reference_readings if entry["id"] != reading_id]
+        if self.selected_reference_id == reading_id:
+            replacement = next(
+                (entry for entry in self.reference_readings if entry["type_of_read"] == "INTERIM"),
+                self.reference_readings[0] if self.reference_readings else None,
+            )
+            self.selected_reference_id = replacement["id"] if replacement else None
+            self._rebuild_existing_data_with_selected_reference(persist_cache=True)
+        self._refresh_reference_readings_table()
+        self.save_config(force=True)
 
     def _get_extension_for_format(self, format_type: str) -> str:
         return OUTPUT_EXTENSIONS.get(format_type, ".csv")
@@ -1715,7 +2095,7 @@ QDateEdit::drop-down {{
         except ValueError:
             return False
 
-        reading_time = normalize_datetime(reading_start).time().replace(second=0, microsecond=0)
+        reading_time = self._display_datetime(reading_start).time().replace(second=0, microsecond=0)
         if start_time < end_time:
             return start_time <= reading_time < end_time
         return reading_time >= start_time or reading_time < end_time
@@ -1952,7 +2332,7 @@ QDateEdit::drop-down {{
         if not self.existing_data:
             return
 
-        latest_start = max(normalize_datetime(reading["start"]) for reading in self.existing_data)
+        latest_start = max(self._display_datetime(reading["start"]) for reading in self.existing_data)
         target_date = QDate(latest_start.year, latest_start.month, latest_start.day)
 
         if force or not self._analysis_date_initialized:
@@ -1966,7 +2346,7 @@ QDateEdit::drop-down {{
         if not readings:
             return []
 
-        ordered_starts = sorted(normalize_datetime(reading["start"]) for reading in readings)
+        ordered_starts = sorted(self._display_datetime(reading["start"]) for reading in readings)
         existing_starts = set(ordered_starts)
         first_start = ordered_starts[0]
         last_start = ordered_starts[-1]
@@ -1985,7 +2365,7 @@ QDateEdit::drop-down {{
             self.latest_entry_line_edit.setText("")
         else:
             self.latest_entry_line_edit.setText(
-                normalize_datetime(self.latest_timestamp).strftime("%d.%m.%Y %H:%M:%S")
+                self._display_datetime(self.latest_timestamp).strftime("%d.%m.%Y %H:%M:%S")
             )
 
         missing_entries = self._list_missing_entry_timestamps(self.existing_data)
@@ -2071,14 +2451,9 @@ QDateEdit::drop-down {{
 
         start_dt = datetime(start_date.year, start_date.month, start_date.day)
         end_dt = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
-        running_meter_reading = 0.0
 
-        for reading in sorted(
-            self.existing_data,
-            key=lambda item: normalize_datetime(item["start"]),
-        ):
-            reading_start = normalize_datetime(reading["start"])
-            running_meter_reading += float(reading["consumption_kwh"])
+        for reading in build_readings_with_meter_reading(self.existing_data):
+            reading_start = self._display_datetime(reading["start"])
             if reading_start < start_dt or reading_start >= end_dt:
                 continue
 
@@ -2097,7 +2472,7 @@ QDateEdit::drop-down {{
                 buckets[index].rate_values_kwh.get(rate_name, 0.0)
                 + float(reading["consumption_kwh"])
             )
-            buckets[index].meter_reading_kwh = running_meter_reading
+            buckets[index].meter_reading_kwh = float(reading["meter_reading_kwh"])
 
         return buckets, title, first_column_title, start_date, end_date
 
@@ -2119,15 +2494,10 @@ QDateEdit::drop-down {{
 
             start_dt = datetime(selected_date.year, selected_date.month, selected_date.day)
             end_dt = start_dt + timedelta(days=1)
-            running_meter_reading = 0.0
 
-            for reading in sorted(
-                self.existing_data,
-                key=lambda item: normalize_datetime(item["start"]),
-            ):
-                reading_start = normalize_datetime(reading["start"])
+            for reading in build_readings_with_meter_reading(self.existing_data):
+                reading_start = self._display_datetime(reading["start"])
                 consumption_value = float(reading["consumption_kwh"])
-                running_meter_reading += consumption_value
 
                 if reading_start < start_dt or reading_start >= end_dt:
                     continue
@@ -2137,7 +2507,7 @@ QDateEdit::drop-down {{
                     f"{reading_start.strftime('%d.%m.%Y %H:00')}"
                 )
                 consumption_text = f"{self._format_decimal(consumption_value, 3)} kWh"
-                meter_text = f"{self._format_decimal(running_meter_reading, 3)} kWh"
+                meter_text = f"{self._format_decimal(float(reading['meter_reading_kwh']), 3)} kWh"
                 tariff_name = self._get_rate_name_for_reading(reading_start, tariff_type)
 
                 row_items = [
@@ -2166,7 +2536,6 @@ QDateEdit::drop-down {{
             self.analysis_table_model.setHorizontalHeaderLabels(headers)
 
             bucket_end_values: list[float] = [0.0] * len(buckets)
-            running_meter_reading = 0.0
             if mode == "week":
                 start_date = selected_date - timedelta(days=selected_date.weekday())
             elif mode == "month":
@@ -2174,12 +2543,8 @@ QDateEdit::drop-down {{
             else:
                 start_date = date(selected_date.year, 1, 1)
 
-            for reading in sorted(
-                self.existing_data,
-                key=lambda item: normalize_datetime(item["start"]),
-            ):
-                reading_start = normalize_datetime(reading["start"])
-                running_meter_reading += float(reading["consumption_kwh"])
+            for reading in build_readings_with_meter_reading(self.existing_data):
+                reading_start = self._display_datetime(reading["start"])
 
                 if mode == "week":
                     end_date = start_date + timedelta(days=6)
@@ -2196,7 +2561,7 @@ QDateEdit::drop-down {{
                     bucket_index = reading_start.month - 1
 
                 if 0 <= bucket_index < len(bucket_end_values):
-                    bucket_end_values[bucket_index] = running_meter_reading
+                    bucket_end_values[bucket_index] = float(reading["meter_reading_kwh"])
 
             for index, bucket in enumerate(buckets):
                 meter_text = f"{self._format_decimal(bucket_end_values[index], 3)} kWh"
@@ -2332,6 +2697,7 @@ QDateEdit::drop-down {{
     def load_config(self) -> None:
         if not CONFIG_FILE.exists():
             self._has_saved_base_price = False
+            self._refresh_reference_readings_table()
             self._update_settings_data_summary()
             self._refresh_analysis_view()
             return
@@ -2350,6 +2716,7 @@ QDateEdit::drop-down {{
             self.save_config_checkbox.setChecked(bool(config_saving_enabled))
             self.debug_checkbox.setChecked(bool(config.get("debug", False)))
             self.auto_output_checkbox.setChecked(bool(config.get(AUTO_OUTPUT_FLAG, False)))
+            self.use_local_time_checkbox.setChecked(bool(config.get(USE_LOCAL_TIME_CONFIG_KEY, True)))
 
             self.output_format_combo.blockSignals(True)
             self.output_format_combo.setCurrentText(saved_format)
@@ -2424,6 +2791,11 @@ QDateEdit::drop-down {{
             self.current_tariff_display_name = (
                 saved_display_name if saved_display_name not in {None, ""} else "None"
             )
+            self.reference_readings = self._deserialize_reference_readings(
+                config.get(REFERENCE_READINGS_CONFIG_KEY, [])
+            )
+            self.selected_reference_id = config.get(SELECTED_REFERENCE_ID_CONFIG_KEY)
+            self._refresh_reference_readings_table()
 
             self.on_format_changed(saved_format)
             self._update_settings_data_summary()
@@ -2452,6 +2824,21 @@ QDateEdit::drop-down {{
                 return
 
             self.existing_data = existing_data
+            if self.selected_reference_id:
+                self.existing_data = build_readings_with_meter_reading(
+                    [
+                        {
+                            "start": normalize_datetime(reading["start"]),
+                            "end": normalize_datetime(reading["end"]),
+                            "consumption_kwh": float(reading["consumption_kwh"]),
+                            "api_start": reading.get("api_start"),
+                            "api_end": reading.get("api_end"),
+                            "api_value": reading.get("api_value"),
+                        }
+                        for reading in existing_data
+                    ],
+                    reference_reading=self._get_selected_reference_reading(),
+                )
             self.latest_timestamp = latest_end
             self._update_settings_data_summary()
 
@@ -2506,6 +2893,9 @@ QDateEdit::drop-down {{
             CONFIG_SAVE_FLAG: self.save_config_checkbox.isChecked(),
             "output_file": str(self._get_normalized_output_path()),
             "excel_file": str(self._get_normalized_output_path()),
+            REFERENCE_READINGS_CONFIG_KEY: self._serialize_reference_readings(),
+            SELECTED_REFERENCE_ID_CONFIG_KEY: self.selected_reference_id,
+            USE_LOCAL_TIME_CONFIG_KEY: self.use_local_time_checkbox.isChecked(),
         }
         config.pop(LAST_TARIFF_CODE_CONFIG_KEY, None)
 
@@ -2579,14 +2969,15 @@ QDateEdit::drop-down {{
 
     def _write_csv_file(self, path: Path, readings: list[dict]) -> None:
         export_rows = build_readings_with_meter_reading(readings)
+        use_local_time = self.use_local_time_checkbox.isChecked()
         with open(path, "w", newline="", encoding="utf-8") as csv_file:
             writer = csv.writer(csv_file)
             writer.writerow(["start", "end", "consumption_kwh", "meter_reading_kwh"])
             for reading in export_rows:
                 writer.writerow(
                     [
-                        format_datetime(reading["start"]),
-                        format_datetime(reading["end"]),
+                        format_datetime(reading["start"], use_local_time=use_local_time),
+                        format_datetime(reading["end"], use_local_time=use_local_time),
                         reading["consumption_kwh"],
                         reading["meter_reading_kwh"],
                     ]
@@ -2594,6 +2985,7 @@ QDateEdit::drop-down {{
 
     def _export_data(self, readings: list[dict], *, show_message: bool) -> None:
         format_type = self.output_format_combo.currentText()
+        use_local_time = self.use_local_time_checkbox.isChecked()
         output_path = self._get_normalized_output_path().resolve()
         try:
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2623,8 +3015,18 @@ QDateEdit::drop-down {{
                 template_path = ensure_excel_template(current_tariff_type)
 
             self._set_status("Excel-Datei wird gefuellt...", update=True)
+            excel_readings = readings
+            if use_local_time:
+                excel_readings = [
+                    {
+                        **reading,
+                        "start": to_local_datetime(reading["start"]),
+                        "end": to_local_datetime(reading["end"]),
+                    }
+                    for reading in readings
+                ]
             success = fill_excel_template(
-                readings,
+                excel_readings,
                 str(template_path),
                 str(output_path),
                 tariff_go_ct=tariff_go_ct,
@@ -2662,7 +3064,7 @@ QDateEdit::drop-down {{
                 f"Speichere {len(readings)} Eintraege als JSON...",
                 update=True,
             )
-            if not save_to_json(readings, output_path):
+            if not save_to_json(readings, output_path, use_local_time=use_local_time):
                 raise Exception("Fehler beim Speichern als JSON")
             if show_message:
                 self._show_info(
@@ -2677,7 +3079,7 @@ QDateEdit::drop-down {{
                 f"Speichere {len(readings)} Eintraege als YAML...",
                 update=True,
             )
-            if not save_to_yaml(readings, output_path):
+            if not save_to_yaml(readings, output_path, use_local_time=use_local_time):
                 raise Exception("Fehler beim Speichern als YAML")
             if show_message:
                 self._show_info(
@@ -2779,6 +3181,7 @@ QDateEdit::drop-down {{
             pass
         self.save_config()
         self._start_progress()
+        previous_cached_readings = list(self.existing_data)
 
         try:
             with self._capture_debug_output():
@@ -2796,6 +3199,10 @@ QDateEdit::drop-down {{
                     fetch_from = period_from
                     fetch_to = period_to
                     need_to_fetch = True
+                    csv_needs_api_refresh = (
+                        bool(self.existing_data)
+                        and not consumption_csv_has_api_format(self.consumption_csv_path)
+                    )
 
                     if self.latest_timestamp and self.latest_timestamp.date() >= (today - timedelta(days=1)).date():
                         self._set_status(
@@ -2813,6 +3220,13 @@ QDateEdit::drop-down {{
                             need_to_fetch = False
                         self._set_status(
                             f"Vorhandene Daten entdeckt. Lese ab {fetch_from}...",
+                            update=True,
+                        )
+                    if csv_needs_api_refresh and self.existing_data:
+                        need_to_fetch = True
+                        fetch_from = min(reading["start"] for reading in self.existing_data)
+                        self._set_status(
+                            "consumption.csv ist nicht im API-Format. Daten werden neu geladen.",
                             update=True,
                         )
 
@@ -2883,6 +3297,8 @@ QDateEdit::drop-down {{
                         raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
                     _tariff_type, tariff_go_ct, tariff_standard_ct, _tariff_high_ct, monthly_base_price_eur = tariff_values
 
+                    reference_reading = self._get_selected_reference_reading()
+
                     if need_to_fetch:
                         self._set_status(
                             f"Kundennummer gefunden: {account_number}",
@@ -2907,7 +3323,12 @@ QDateEdit::drop-down {{
                                 "- Falsche Kundennummer"
                             )
 
-                        malo_number, _meter_id, property_id = meter_info
+                        malo_number, meter_id, property_id = meter_info
+                        self._merge_reference_readings(
+                            client.get_meter_reference_readings(account_number, meter_id)
+                        )
+                        reference_reading = self._get_selected_reference_reading()
+                        self.save_config(force=True)
                         self._set_status(
                             f"Zaehler fuer MALO {malo_number} gefunden, Daten werden abgerufen...",
                             update=True,
@@ -2996,39 +3417,47 @@ QDateEdit::drop-down {{
                     if not all_readings:
                         raise Exception("Keine Daten zum Speichern!")
 
-                    seen = {}
-                    for reading in all_readings:
-                        seen[reading["start"].isoformat()] = reading
-
-                    unique_data = list(seen.values())
-                    unique_data.sort(key=lambda item: normalize_datetime(item["start"]))
-
-                    self.existing_data = unique_data
-                    if unique_data:
+                    self.existing_data = merge_readings(
+                        all_readings,
+                        reference_reading=reference_reading,
+                    )
+                    if self.existing_data:
                         self.latest_timestamp = max(
-                            normalize_datetime(reading["end"]) for reading in unique_data
+                            normalize_datetime(reading["end"]) for reading in self.existing_data
                         )
                     self._update_settings_data_summary()
 
-                    self._set_status(
-                        f"Speichere {len(unique_data)} Eintraege in consumption.csv...",
-                        update=True,
-                    )
-                    self._write_csv_file(self.csv_path, unique_data)
+                    if readings_changed(previous_cached_readings, self.existing_data):
+                        self._set_status(
+                            f"Speichere {len(self.existing_data)} Eintraege in readings.json...",
+                            update=True,
+                        )
+                        if not write_readings_json(self.existing_data, self.csv_path):
+                            raise Exception("readings.json konnte nicht gespeichert werden")
+                        if not write_consumption_csv(self.existing_data, self.consumption_csv_path):
+                            raise Exception("consumption.csv konnte nicht gespeichert werden")
+                    elif csv_needs_api_refresh:
+                        if not write_consumption_csv(self.existing_data, self.consumption_csv_path):
+                            raise Exception("consumption.csv konnte nicht gespeichert werden")
+                    else:
+                        self._set_status(
+                            "Keine neuen Eintraege fuer readings.json gefunden.",
+                            update=True,
+                        )
 
                     if self.auto_output_checkbox.isChecked():
-                        self._export_data(unique_data, show_message=True)
+                        self._export_data(self.existing_data, show_message=True)
                     else:
                         self._show_info(
                             "Daten erfolgreich gespeichert!\n\n"
-                            f"CSV: consumption.csv ({len(unique_data)} Eintraege)\n"
+                            f"Cache: readings.json ({len(self.existing_data)} Eintraege)\n"
                             "Automatische Ausgabe ist deaktiviert."
                         )
 
                     self._set_default_analysis_date(force=True)
                     self._refresh_analysis_view()
                     self._set_status(
-                        f"Fertig! Daten gespeichert ({len(unique_data)} Eintraege)"
+                        f"Fertig! Daten gespeichert ({len(self.existing_data)} Eintraege)"
                     )
                 except Exception:
                     if self.debug_checkbox.isChecked():
