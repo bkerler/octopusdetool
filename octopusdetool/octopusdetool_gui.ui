@@ -17,7 +17,7 @@
    </size>
   </property>
   <property name="windowTitle">
-   <string>Octopus Energy Germany - Smartmeter Datenexport V1.1.6</string>
+   <string>Octopus Energy Germany - Smartmeter Datenexport V1.1.7</string>
   </property>
   <property name="styleSheet">
 <string notr="true">QWidget {
@@ -390,6 +390,44 @@ QTableView#analysisTableView {
     selection-color: #ffffff;
 }
 
+QTableView#missingEntriesTableView,
+QTableView#referenceReadingsTableView {
+    background-color: #240748;
+    alternate-background-color: #2e1160;
+    border: 1px solid #6f4df6;
+    gridline-color: #5e47a3;
+    color: #f4eeff;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+}
+
+QTableView#missingEntriesTableView::item,
+QTableView#referenceReadingsTableView::item {
+    background-color: transparent;
+    color: #f4eeff;
+}
+
+QTableView#missingEntriesTableView::item:selected,
+QTableView#referenceReadingsTableView::item:selected {
+    background-color: #6f4df6;
+    color: #ffffff;
+}
+
+QTableView#missingEntriesTableView QLineEdit,
+QTableView#missingEntriesTableView QComboBox,
+QTableView#missingEntriesTableView QDateEdit,
+QTableView#missingEntriesTableView QAbstractSpinBox,
+QTableView#referenceReadingsTableView QLineEdit,
+QTableView#referenceReadingsTableView QComboBox,
+QTableView#referenceReadingsTableView QDateEdit,
+QTableView#referenceReadingsTableView QAbstractSpinBox {
+    background-color: #1c0638;
+    color: #f4eeff;
+    selection-background-color: #6f4df6;
+    selection-color: #ffffff;
+    border: 1px solid #6f4df6;
+}
+
 QTableView#analysisTableView QHeaderView::section {
     background-color: #1c0638;
     color: #f4eeff;
@@ -494,7 +532,7 @@ QTableView#analysisTableView QHeaderView::section {
               <item>
                <widget class="QLabel" name="heroTitleLabel">
                 <property name="text">
-                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:700; color:#ffffff;&quot;&gt;Octopus&lt;/span&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:300; color:#ffffff;&quot;&gt; Energy Deutschland Smartmeter Datenexport V1.1.6&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                 <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:700; color:#ffffff;&quot;&gt;Octopus&lt;/span&gt;&lt;span style=&quot;font-family:'Ubuntu Sans'; font-size:22pt; font-weight:300; color:#ffffff;&quot;&gt; Energy Deutschland Smartmeter Datenexport V1.1.7&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                 </property>
                 <property name="wordWrap">
                  <bool>true</bool>
