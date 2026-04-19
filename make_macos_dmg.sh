@@ -9,4 +9,4 @@ rm -rf dist/
 rm -rf logs/
 python3 -m briefcase create macOS Xcode
 python3 -m briefcase build macOS Xcode
-python3 -m briefcase package macOS Xcode -i 0FACCD5E48260DDA00C85D517BCAD13F022A28F1
+python3 -m briefcase package macOS Xcode -i 3A2119184B8802BDA00284B29B63B6D8C119B95A
