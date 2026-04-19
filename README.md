@@ -144,6 +144,9 @@ python -m octopusdetool.octopusdetool \
 
 ## Ausgabe
 
+> Warnung:
+> Die Zählerstände werden inkrementell basierend auf den Smartmeterwerten addiert und können daher von dem echten Smartmeterwert abweichen. Nur die Verbrauchswerte stammen tatsächlich aus der API-Abfrage.
+
 Die Daten werden in `~/Documents/smartmeter_data/` gespeichert:
 
 ```

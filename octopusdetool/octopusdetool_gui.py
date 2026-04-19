@@ -87,6 +87,7 @@ from octopusdetool.octopusdetool import (
     normalize_datetime,
     save_to_json,
     save_to_yaml,
+    build_readings_with_meter_reading,
 )
 
 
@@ -2407,15 +2408,17 @@ QDateEdit::drop-down {{
         return True
 
     def _write_csv_file(self, path: Path, readings: list[dict]) -> None:
+        export_rows = build_readings_with_meter_reading(readings)
         with open(path, "w", newline="", encoding="utf-8") as csv_file:
             writer = csv.writer(csv_file)
-            writer.writerow(["start", "end", "consumption_kwh"])
-            for reading in readings:
+            writer.writerow(["start", "end", "consumption_kwh", "meter_reading_kwh"])
+            for reading in export_rows:
                 writer.writerow(
                     [
                         format_datetime(reading["start"]),
                         format_datetime(reading["end"]),
                         reading["consumption_kwh"],
+                        reading["meter_reading_kwh"],
                     ]
                 )
 
