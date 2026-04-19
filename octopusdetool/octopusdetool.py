@@ -29,10 +29,12 @@ import yaml
 
 try:
     APP_TIMEZONE = ZoneInfo("Europe/Berlin")
+    APP_TIMEZONE_HAS_IANA_DATA = True
 except ZoneInfoNotFoundError:
     # Windows installations may not ship an IANA timezone database.
-    # Fall back to the system local timezone when available, otherwise CET.
+    # Fall back to the system local timezone for conversions, otherwise CET.
     APP_TIMEZONE = datetime.now().astimezone().tzinfo or timezone(timedelta(hours=1))
+    APP_TIMEZONE_HAS_IANA_DATA = False
 
 EXCEL_TEMPLATE_FILENAME = "smartmeter_daten.xlsx"
 HEAT_EXCEL_TEMPLATE_FILENAME = "smartmeter_heat_daten.xlsx"
@@ -637,8 +639,8 @@ def get_tariff_rate_ct(
     tariff_high_ct: float = 0.0,
 ) -> float:
     """Return the tariff in ct/kWh for the given interval start."""
-    normalized_start = normalize_datetime(reading_start)
-    hour = normalized_start.hour
+    local_start = to_local_datetime(reading_start)
+    hour = local_start.hour
 
     if tariff_type == TARIFF_INTELLIGENT_HEAT:
         if hour in {2, 3, 4, 5, 12, 13, 14, 15}:
@@ -647,12 +649,12 @@ def get_tariff_rate_ct(
             return tariff_high_ct
         return tariff_standard_ct
 
-    return tariff_go_ct if 0 <= hour <= 4 else tariff_standard_ct
+    return tariff_go_ct if 0 <= hour <= 5 else tariff_standard_ct
 
 
 def classify_tariff_zone(reading_start: datetime, tariff_type: str) -> str:
-    normalized_start = normalize_datetime(reading_start)
-    hour = normalized_start.hour
+    local_start = to_local_datetime(reading_start)
+    hour = local_start.hour
 
     if tariff_type == TARIFF_INTELLIGENT_HEAT:
         if hour in {2, 3, 4, 5, 12, 13, 14, 15}:
@@ -661,7 +663,7 @@ def classify_tariff_zone(reading_start: datetime, tariff_type: str) -> str:
             return "high"
         return "standard"
 
-    return "low" if 0 <= hour <= 4 else "standard"
+    return "low" if 0 <= hour <= 5 else "standard"
 
 
 def _normalize_rate_windows(windows: list[dict] | None) -> tuple[tuple[str, str], ...]:
@@ -1687,8 +1689,14 @@ class OctopusGermanyClient:
 def to_local_datetime(dt: datetime) -> datetime:
     """Convert a datetime to a naive local app-timezone value for display."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc).astimezone(APP_TIMEZONE).replace(tzinfo=None)
-    return dt.astimezone(APP_TIMEZONE).replace(tzinfo=None)
+        dt = dt.replace(tzinfo=timezone.utc)
+
+    if APP_TIMEZONE_HAS_IANA_DATA:
+        return dt.astimezone(APP_TIMEZONE).replace(tzinfo=None)
+
+    # Without IANA data, use the system local timezone conversion directly so
+    # each timestamp gets the correct seasonal offset instead of a fixed one.
+    return dt.astimezone().replace(tzinfo=None)
 
 
 def format_datetime(dt: datetime, *, use_local_time: bool = False) -> str:

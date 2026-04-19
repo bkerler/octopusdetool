@@ -73,7 +73,6 @@ from octopusdetool.octopusdetool import (
     TARIFF_INTELLIGENT_HEAT,
     TariffAgreement,
     TariffRate,
-    classify_tariff_zone,
     cleanup_app_config_folder,
     detect_excel_template_type,
     ensure_excel_template,
@@ -2113,10 +2112,26 @@ QDateEdit::drop-down {{
         except ValueError:
             return False
 
-        reading_time = self._display_datetime(reading_start).time().replace(second=0, microsecond=0)
+        # Tariff windows are always defined in local time, regardless of
+        # whether the analysis view currently displays local time or UTC.
+        reading_time = to_local_datetime(reading_start).time().replace(second=0, microsecond=0)
         if start_time < end_time:
             return start_time <= reading_time < end_time
         return reading_time >= start_time or reading_time < end_time
+
+    def _classify_local_tariff_zone(self, reading_start: datetime, tariff_type: str) -> str:
+        # Fixed tariff fallback uses the same local-time tariff windows as the
+        # provider/API windows above.
+        reading_hour = to_local_datetime(reading_start).hour
+
+        if tariff_type == TARIFF_INTELLIGENT_HEAT:
+            if reading_hour in {2, 3, 4, 5, 12, 13, 14, 15}:
+                return "low"
+            if reading_hour in {18, 19, 20}:
+                return "high"
+            return "standard"
+
+        return "low" if 0 <= reading_hour <= 4 else "standard"
 
     def _get_rate_name_for_reading(self, reading_start: datetime, tariff_type: str) -> str:
         if self.current_tariff_rates:
@@ -2125,7 +2140,7 @@ QDateEdit::drop-down {{
                     return rate.name
 
         fixed_labels = self._get_fixed_rate_labels(tariff_type)
-        zone = classify_tariff_zone(reading_start, tariff_type)
+        zone = self._classify_local_tariff_zone(reading_start, tariff_type)
         if zone == "low":
             return fixed_labels[0]
         if zone == "high" and len(fixed_labels) > 2:
@@ -2471,21 +2486,21 @@ QDateEdit::drop-down {{
         end_dt = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
 
         for reading in build_readings_with_meter_reading(self.existing_data):
-            reading_start = self._display_datetime(reading["start"])
-            if reading_start < start_dt or reading_start >= end_dt:
+            reading_display_start = self._display_datetime(reading["start"])
+            if reading_display_start < start_dt or reading_display_start >= end_dt:
                 continue
 
             if mode == "day":
-                index = reading_start.hour
+                index = reading_display_start.hour
             elif mode in {"week", "month"}:
-                index = (reading_start.date() - start_date).days
+                index = (reading_display_start.date() - start_date).days
             else:
-                index = reading_start.month - 1
+                index = reading_display_start.month - 1
 
             if not 0 <= index < len(buckets):
                 continue
 
-            rate_name = self._get_rate_name_for_reading(reading_start, self.current_tariff_type)
+            rate_name = self._get_rate_name_for_reading(reading["start"], self.current_tariff_type)
             buckets[index].rate_values_kwh[rate_name] = (
                 buckets[index].rate_values_kwh.get(rate_name, 0.0)
                 + float(reading["consumption_kwh"])
@@ -2526,7 +2541,7 @@ QDateEdit::drop-down {{
                 )
                 consumption_text = f"{self._format_decimal(consumption_value, 3)} kWh"
                 meter_text = f"{self._format_decimal(float(reading['meter_reading_kwh']), 3)} kWh"
-                tariff_name = self._get_rate_name_for_reading(reading_start, tariff_type)
+                tariff_name = self._get_rate_name_for_reading(reading["start"], tariff_type)
 
                 row_items = [
                     QStandardItem(timestamp_label),
