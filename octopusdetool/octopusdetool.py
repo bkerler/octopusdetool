@@ -2181,7 +2181,7 @@ def write_consumption_csv(readings: list[dict], csv_path: Path) -> bool:
     try:
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['start', 'end', 'consumption_kwh', 'meter_reading_kwh'])
+            writer.writerow(['start', 'end', 'consumption_kwh'])
             for reading in readings:
                 writer.writerow([
                     reading.get('api_start')
@@ -2190,7 +2190,6 @@ def write_consumption_csv(readings: list[dict], csv_path: Path) -> bool:
                     or (reading['end'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['end'], datetime) else reading['end']),
                     reading.get('api_value')
                     or str(reading['consumption_kwh']),
-                    reading['meter_reading_kwh'],
                 ])
         return True
     except Exception as e:
