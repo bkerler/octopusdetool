@@ -21,6 +21,10 @@ Ein Python-Tool zum Abrufen von Smart Meter Verbrauchsdaten über die **Octopus 
 - 🔄 **Automatische Token-Aktualisierung** - Behandelt 60-minütige Token-Gültigkeit
 - 🖥️ **GUI-Version** - Benutzerfreundliche grafische Oberfläche
 
+## Warnhinweis
+Der Zählerstand wird inkrementell durch die Summierung aller Verbrauchsdaten berechnet. Da ich aktuell noch nicht herausgefunden habe, wie man den Zählerstand
+per GraphQL abfragt, ist es daher normal dass die Angabe im Tool nicht mit den echten Stromzählerdaten übereinstimmt.
+
 ## Voraussetzungen
 
 1. Ein Octopus Energy **Deutschland** Konto
