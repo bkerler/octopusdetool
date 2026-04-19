@@ -626,6 +626,7 @@ class OctopusSmartMeterGUI:
         self.auto_output_checkbox = self._find_widget(QCheckBox, "autoOutputCheckBox")
         self.output_file_line_edit = self._find_widget(QLineEdit, "outputFileLineEdit")
         self.browse_output_button = self._find_widget(QPushButton, "browseOutputButton")
+        self.export_existing_button = self._find_widget(QPushButton, "exportExistingButton")
         self.from_date_edit = self._find_widget(QDateEdit, "fromDateEdit")
         self.to_date_edit = self._find_widget(QDateEdit, "toDateEdit")
         self.status_value_label = self._find_widget(QLabel, "statusValueLabel")
@@ -844,7 +845,7 @@ QDateEdit::drop-down {{
 
     def _configure_primary_buttons(self) -> None:
         primary_button_stylesheet = _build_primary_button_stylesheet()
-        for button in (self.fetch_data_button, self.save_settings_button):
+        for button in (self.fetch_data_button, self.save_settings_button, self.export_existing_button):
             button.setStyleSheet(primary_button_stylesheet)
 
     def _configure_tooltip_palette(self) -> None:
@@ -977,6 +978,7 @@ QDateEdit::drop-down {{
         self.output_format_combo.currentTextChanged.connect(self.on_format_changed)
         self.output_file_line_edit.editingFinished.connect(self._normalize_output_entry)
         self.browse_output_button.clicked.connect(self.browse_output_file)
+        self.export_existing_button.clicked.connect(self.export_existing_data)
         self.debug_output_line_edit.editingFinished.connect(self._normalize_debug_output_entry)
         self.browse_debug_output_button.clicked.connect(self.browse_debug_output_file)
         self.fetch_data_button.clicked.connect(self.get_data)
@@ -2407,6 +2409,24 @@ QDateEdit::drop-down {{
 
         return True
 
+    def _validate_export_settings(self) -> bool:
+        if not self.output_file_line_edit.text().strip():
+            self._show_error("Bitte waehlen Sie einen Dateinamen aus!")
+            return False
+
+        if self._get_tariff_values(show_error=True) is None:
+            return False
+
+        if (
+            self.output_format_combo.currentText() == "excel"
+            and not self._excel_export_supported
+        ):
+            self._show_error(self._excel_export_reason or "Excel-Export ist fuer diesen Tarif nicht verfuegbar.")
+            return False
+
+        self._normalize_output_entry()
+        return True
+
     def _write_csv_file(self, path: Path, readings: list[dict]) -> None:
         export_rows = build_readings_with_meter_reading(readings)
         with open(path, "w", newline="", encoding="utf-8") as csv_file:
@@ -2421,6 +2441,118 @@ QDateEdit::drop-down {{
                         reading["meter_reading_kwh"],
                     ]
                 )
+
+    def _export_data(self, readings: list[dict], *, show_message: bool) -> None:
+        format_type = self.output_format_combo.currentText()
+        output_path = self._get_normalized_output_path().resolve()
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+        if format_type == "excel":
+            if not self._excel_export_supported:
+                raise Exception(
+                    self._excel_export_reason
+                    or "Excel-Export ist fuer diesen Tarif nicht verfuegbar."
+                )
+            current_tariff_values = self._get_tariff_values(show_error=False)
+            if current_tariff_values is None:
+                raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
+            current_tariff_type, tariff_go_ct, tariff_standard_ct, tariff_high_ct, monthly_base_price_eur = current_tariff_values
+
+            template_path = output_path
+            if output_path.exists():
+                existing_template_type = detect_excel_template_type(output_path)
+                if existing_template_type != current_tariff_type:
+                    raise Exception(
+                        "Die ausgewaehlte Excel-Datei passt nicht zum aktuellen Tarifmodell. "
+                        f"Datei: {existing_template_type}, aktueller Tarif: {current_tariff_type}."
+                    )
+            else:
+                template_path = ensure_excel_template(current_tariff_type)
+
+            self._set_status("Excel-Datei wird gefuellt...", update=True)
+            success = fill_excel_template(
+                readings,
+                str(template_path),
+                str(output_path),
+                tariff_go_ct=tariff_go_ct,
+                tariff_standard_ct=tariff_standard_ct,
+                tariff_high_ct=tariff_high_ct,
+                monthly_base_price_eur=monthly_base_price_eur,
+                tariff_type=current_tariff_type,
+            )
+            if not success:
+                raise Exception("Excel-Vorlage konnte nicht gefuellt werden")
+
+            if show_message:
+                self._show_info(
+                    "Daten erfolgreich exportiert!\n\n"
+                    f"Excel: {output_path}"
+                )
+            return
+
+        if format_type == "csv":
+            self._set_status(
+                f"Speichere {len(readings)} Eintraege als CSV...",
+                update=True,
+            )
+            self._write_csv_file(output_path, readings)
+            if show_message:
+                self._show_info(
+                    "Daten erfolgreich exportiert!\n\n"
+                    f"CSV: {output_path}\n"
+                    f"Gesamteintraege: {len(readings)}"
+                )
+            return
+
+        if format_type == "json":
+            self._set_status(
+                f"Speichere {len(readings)} Eintraege als JSON...",
+                update=True,
+            )
+            if not save_to_json(readings, output_path):
+                raise Exception("Fehler beim Speichern als JSON")
+            if show_message:
+                self._show_info(
+                    "Daten erfolgreich exportiert!\n\n"
+                    f"JSON: {output_path}\n"
+                    f"Gesamteintraege: {len(readings)}"
+                )
+            return
+
+        if format_type == "yaml":
+            self._set_status(
+                f"Speichere {len(readings)} Eintraege als YAML...",
+                update=True,
+            )
+            if not save_to_yaml(readings, output_path):
+                raise Exception("Fehler beim Speichern als YAML")
+            if show_message:
+                self._show_info(
+                    "Daten erfolgreich exportiert!\n\n"
+                    f"YAML: {output_path}\n"
+                    f"Gesamteintraege: {len(readings)}"
+                )
+            return
+
+        raise Exception(f"Unbekanntes Ausgabeformat: {format_type}")
+
+    def export_existing_data(self) -> None:
+        if not self.existing_data:
+            self._show_error("Es sind keine geladenen Daten fuer den Export vorhanden.")
+            return
+        if not self._validate_export_settings():
+            return
+
+        try:
+            self.save_config()
+            self._export_data(self.existing_data, show_message=True)
+            self._set_status(f"Export abgeschlossen ({len(self.existing_data)} Eintraege)")
+        except Exception as exc:
+            self._show_error(f"Export fehlgeschlagen:\n\n{exc}")
+            self._set_status(f"Fehler beim Export: {exc}")
 
     def _expected_intervals_for_day(self, day: date) -> int:
         start_local = datetime(day.year, day.month, day.day, tzinfo=APP_TIMEZONE)
@@ -2727,12 +2859,6 @@ QDateEdit::drop-down {{
                             normalize_datetime(reading["end"]) for reading in unique_data
                         )
 
-                    format_type = self.output_format_combo.currentText()
-                    output_path = self._get_normalized_output_path().resolve()
-                    try:
-                        output_path.parent.mkdir(parents=True, exist_ok=True)
-                    except OSError:
-                        pass
                     self._set_status(
                         f"Speichere {len(unique_data)} Eintraege in consumption.csv...",
                         update=True,
@@ -2740,86 +2866,7 @@ QDateEdit::drop-down {{
                     self._write_csv_file(self.csv_path, unique_data)
 
                     if self.auto_output_checkbox.isChecked():
-                        if format_type == "excel":
-                            if not self._excel_export_supported:
-                                raise Exception(
-                                    self._excel_export_reason
-                                    or "Excel-Export ist fuer diesen Tarif nicht verfuegbar."
-                                )
-                            current_tariff_values = self._get_tariff_values(show_error=False)
-                            if current_tariff_values is None:
-                                raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
-                            current_tariff_type, tariff_go_ct, tariff_standard_ct, tariff_high_ct, monthly_base_price_eur = current_tariff_values
-
-                            template_path = output_path
-                            if output_path.exists():
-                                existing_template_type = detect_excel_template_type(output_path)
-                                if existing_template_type != current_tariff_type:
-                                    raise Exception(
-                                        "Die ausgewaehlte Excel-Datei passt nicht zum aktuellen Tarifmodell. "
-                                        f"Datei: {existing_template_type}, aktueller Tarif: {current_tariff_type}."
-                                    )
-                            else:
-                                template_path = ensure_excel_template(current_tariff_type)
-
-                            self._set_status("Excel-Datei wird gefuellt...", update=True)
-                            success = fill_excel_template(
-                                unique_data,
-                                str(template_path),
-                                str(output_path),
-                                tariff_go_ct=tariff_go_ct,
-                                tariff_standard_ct=tariff_standard_ct,
-                                tariff_high_ct=tariff_high_ct,
-                                monthly_base_price_eur=monthly_base_price_eur,
-                                tariff_type=current_tariff_type,
-                            )
-                            if not success:
-                                raise Exception("Excel-Vorlage konnte nicht gefuellt werden")
-
-                            self._show_info(
-                                "Daten erfolgreich gespeichert!\n\n"
-                                f"CSV: consumption.csv ({len(unique_data)} Eintraege)\n"
-                                f"Excel: {output_path}"
-                            )
-                        elif format_type == "csv":
-                            if output_path != self.csv_path.resolve():
-                                self._set_status(
-                                    f"Speichere {len(unique_data)} Eintraege als CSV...",
-                                    update=True,
-                                )
-                                self._write_csv_file(output_path, unique_data)
-
-                            self._show_info(
-                                "Daten erfolgreich gespeichert!\n\n"
-                                f"CSV: {output_path}\n"
-                                f"Gesamteintraege: {len(unique_data)}"
-                            )
-                        elif format_type == "json":
-                            self._set_status(
-                                f"Speichere {len(unique_data)} Eintraege als JSON...",
-                                update=True,
-                            )
-                            if not save_to_json(unique_data, output_path):
-                                raise Exception("Fehler beim Speichern als JSON")
-
-                            self._show_info(
-                                "Daten erfolgreich gespeichert!\n\n"
-                                f"JSON: {output_path}\n"
-                                f"Gesamteintraege: {len(unique_data)}"
-                            )
-                        elif format_type == "yaml":
-                            self._set_status(
-                                f"Speichere {len(unique_data)} Eintraege als YAML...",
-                                update=True,
-                            )
-                            if not save_to_yaml(unique_data, output_path):
-                                raise Exception("Fehler beim Speichern als YAML")
-
-                            self._show_info(
-                                "Daten erfolgreich gespeichert!\n\n"
-                                f"YAML: {output_path}\n"
-                                f"Gesamteintraege: {len(unique_data)}"
-                            )
+                        self._export_data(unique_data, show_message=True)
                     else:
                         self._show_info(
                             "Daten erfolgreich gespeichert!\n\n"
