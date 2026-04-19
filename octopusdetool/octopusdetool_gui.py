@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QStyleFactory,
 )
+import yaml
 
 from octopusdetool.analysis_view import DisplayBucket, TariffChartView
 from octopusdetool.octopusdetool import (
@@ -645,6 +646,8 @@ class OctopusSmartMeterGUI:
         self.tariff_high_label = self._find_widget(QLabel, "tariffHighLabel")
         self.tariff_high_line_edit = self._find_widget(QLineEdit, "tariffHighLineEdit")
         self.base_price_line_edit = self._find_widget(QLineEdit, "basePriceLineEdit")
+        self.latest_entry_line_edit = self._find_widget(QLineEdit, "latestEntryLineEdit")
+        self.missing_entries_table_view = self._find_widget(QTableView, "missingEntriesTableView")
         self.save_settings_button = self._find_widget(QPushButton, "saveSettingsButton")
         self.config_path_line_edit = self._find_widget(QLineEdit, "configPathLineEdit")
 
@@ -837,11 +840,25 @@ QDateEdit::drop-down {{
             self.tariff_standard_line_edit,
             self.tariff_high_line_edit,
             self.base_price_line_edit,
+            self.latest_entry_line_edit,
             self.config_path_line_edit,
         ):
             line_edit.setStyleSheet(line_edit_stylesheet)
 
         self.tariff_type_combo.setStyleSheet(_build_combo_stylesheet("#240748"))
+        self.missing_entries_table_model = QStandardItemModel(self.missing_entries_table_view)
+        self.missing_entries_table_model.setHorizontalHeaderLabels(["Datum", "Uhrzeit"])
+        self.missing_entries_table_view.setModel(self.missing_entries_table_model)
+        self.missing_entries_table_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.missing_entries_table_view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.missing_entries_table_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.missing_entries_table_view.setAlternatingRowColors(True)
+        self.missing_entries_table_view.verticalHeader().hide()
+        self.missing_entries_table_view.horizontalHeader().setStretchLastSection(True)
+        self.missing_entries_table_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.missing_entries_table_view.customContextMenuRequested.connect(
+            self._show_missing_entries_table_context_menu
+        )
 
     def _configure_primary_buttons(self) -> None:
         primary_button_stylesheet = _build_primary_button_stylesheet()
@@ -942,6 +959,83 @@ QDateEdit::drop-down {{
             self._copy_text_to_clipboard(self._analysis_table_all_to_csv())
         elif selected_action is save_all_action and has_rows:
             self._save_analysis_table_as_csv()
+
+    def _missing_entries_table_rows(self) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        for row in range(self.missing_entries_table_model.rowCount()):
+            date_item = self.missing_entries_table_model.item(row, 0)
+            time_item = self.missing_entries_table_model.item(row, 1)
+            rows.append(
+                {
+                    "date": "" if date_item is None else date_item.text(),
+                    "time": "" if time_item is None else time_item.text(),
+                }
+            )
+        return rows
+
+    def _missing_entries_table_to_csv(self) -> str:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Datum", "Uhrzeit"])
+        for row in self._missing_entries_table_rows():
+            writer.writerow([row["date"], row["time"]])
+        return output.getvalue()
+
+    def _export_missing_entries_table(self, format_type: str) -> None:
+        default_path = self._ensure_output_suffix(
+            self._get_default_output_path(format_type).with_name(
+                f"fehlende_dateneintraege{self._get_extension_for_format(format_type)}"
+            ),
+            format_type,
+        )
+        filename, _ = QFileDialog.getSaveFileName(
+            self.window,
+            f"Fehlende Dateneinträge als {format_type.upper()} speichern",
+            str(default_path),
+            self._get_file_filter_for_format(format_type),
+        )
+        if not filename:
+            return
+
+        target = self._ensure_output_suffix(Path(filename), format_type)
+        rows = self._missing_entries_table_rows()
+
+        if format_type == "csv":
+            target.write_text(self._missing_entries_table_to_csv(), encoding="utf-8", newline="")
+        elif format_type == "json":
+            target.write_text(json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8")
+        elif format_type == "yaml":
+            target.write_text(yaml.safe_dump(rows, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        else:
+            return
+
+        self._set_status(f"Fehlende Dateneinträge exportiert: {target}")
+
+    def _show_missing_entries_table_context_menu(self, position) -> None:
+        has_rows = self.missing_entries_table_model.rowCount() > 0
+        menu = QMenu(self.missing_entries_table_view)
+        export_csv_action = menu.addAction("Export nach csv")
+        export_json_action = menu.addAction("Export nach json")
+        export_yaml_action = menu.addAction("Export nach yaml")
+        copy_action = menu.addAction("In Zwischenablage kopieren")
+
+        export_csv_action.setEnabled(has_rows)
+        export_json_action.setEnabled(has_rows)
+        export_yaml_action.setEnabled(has_rows)
+        copy_action.setEnabled(has_rows)
+
+        selected_action = menu.exec(self.missing_entries_table_view.viewport().mapToGlobal(position))
+        if selected_action is None:
+            return
+
+        if selected_action is export_csv_action and has_rows:
+            self._export_missing_entries_table("csv")
+        elif selected_action is export_json_action and has_rows:
+            self._export_missing_entries_table("json")
+        elif selected_action is export_yaml_action and has_rows:
+            self._export_missing_entries_table("yaml")
+        elif selected_action is copy_action and has_rows:
+            self._copy_text_to_clipboard(self._missing_entries_table_to_csv())
 
     def _set_initial_values(self) -> None:
         self.main_tab_widget.setCurrentIndex(0)
@@ -1868,6 +1962,50 @@ QDateEdit::drop-down {{
             self._analysis_date_initialized = True
             self._configure_view_date_edit()
 
+    def _list_missing_entry_timestamps(self, readings: list[dict]) -> list[datetime]:
+        if not readings:
+            return []
+
+        ordered_starts = sorted(normalize_datetime(reading["start"]) for reading in readings)
+        existing_starts = set(ordered_starts)
+        first_start = ordered_starts[0]
+        last_start = ordered_starts[-1]
+        missing_entries: list[datetime] = []
+        cursor = first_start
+
+        while cursor < last_start:
+            if cursor not in existing_starts:
+                missing_entries.append(cursor)
+            cursor += timedelta(hours=1)
+
+        return missing_entries
+
+    def _update_settings_data_summary(self) -> None:
+        if self.latest_timestamp is None:
+            self.latest_entry_line_edit.setText("")
+        else:
+            self.latest_entry_line_edit.setText(
+                normalize_datetime(self.latest_timestamp).strftime("%d.%m.%Y %H:%M:%S")
+            )
+
+        missing_entries = self._list_missing_entry_timestamps(self.existing_data)
+        self.missing_entries_table_model.clear()
+        self.missing_entries_table_model.setHorizontalHeaderLabels(["Datum", "Uhrzeit"])
+        if not missing_entries:
+            return
+
+        for entry in missing_entries:
+            self.missing_entries_table_model.appendRow(
+                [
+                    QStandardItem(entry.strftime("%d.%m.%Y")),
+                    QStandardItem(entry.strftime("%H:%M:%S")),
+                ]
+            )
+
+        header = self.missing_entries_table_view.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+
     def _build_analysis_buckets(
         self,
         mode: str,
@@ -2194,6 +2332,7 @@ QDateEdit::drop-down {{
     def load_config(self) -> None:
         if not CONFIG_FILE.exists():
             self._has_saved_base_price = False
+            self._update_settings_data_summary()
             self._refresh_analysis_view()
             return
 
@@ -2287,6 +2426,7 @@ QDateEdit::drop-down {{
             )
 
             self.on_format_changed(saved_format)
+            self._update_settings_data_summary()
             self._refresh_analysis_view()
 
             if migrated:
@@ -2295,6 +2435,7 @@ QDateEdit::drop-down {{
                 self._set_status("Konfiguration aus config.json geladen")
         except Exception as exc:
             self._has_saved_base_price = False
+            self._update_settings_data_summary()
             self._set_status(f"Fehler beim Laden der Konfiguration: {exc}")
 
     def check_existing_data(self) -> None:
@@ -2305,12 +2446,14 @@ QDateEdit::drop-down {{
 
             existing_data, latest_end = load_existing_consumption_data()
             if not existing_data:
+                self._update_settings_data_summary()
                 self._set_status("Keine Verbrauchsdaten gefunden. Bereit zum Abruf aller Daten.")
                 self._refresh_analysis_view()
                 return
 
             self.existing_data = existing_data
             self.latest_timestamp = latest_end
+            self._update_settings_data_summary()
 
             self._set_default_analysis_date()
             self._refresh_analysis_view()
@@ -2326,6 +2469,7 @@ QDateEdit::drop-down {{
                     "Fehlende Daten werden abgerufen."
                 )
         except Exception as exc:
+            self._update_settings_data_summary()
             self._set_status(f"Fehler beim Lesen der Verbrauchsdaten: {exc}")
 
     def save_config(self, *, force: bool = False) -> None:
@@ -2864,6 +3008,7 @@ QDateEdit::drop-down {{
                         self.latest_timestamp = max(
                             normalize_datetime(reading["end"]) for reading in unique_data
                         )
+                    self._update_settings_data_summary()
 
                     self._set_status(
                         f"Speichere {len(unique_data)} Eintraege in consumption.csv...",

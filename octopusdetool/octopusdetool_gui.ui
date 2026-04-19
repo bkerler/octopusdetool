@@ -1025,6 +1025,33 @@ QTableView#analysisTableView QHeaderView::section {
           <item row="4" column="1">
            <widget class="QLineEdit" name="basePriceLineEdit"/>
           </item>
+          <item row="5" column="0">
+           <widget class="QLabel" name="latestEntryLabel">
+            <property name="text">
+             <string>Letzter Eintrag:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="1">
+           <widget class="QLineEdit" name="latestEntryLineEdit">
+            <property name="readOnly">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="0">
+           <widget class="QLabel" name="missingEntriesLabel">
+            <property name="text">
+             <string>Fehlende Dateneinträge:</string>
+            </property>
+            <property name="alignment">
+             <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignTop</set>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="1">
+           <widget class="QTableView" name="missingEntriesTableView"/>
+          </item>
          </layout>
         </widget>
        </item>
