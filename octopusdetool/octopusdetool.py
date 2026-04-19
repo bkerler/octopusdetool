@@ -15,6 +15,7 @@ import os
 import platform
 import shutil
 import sys
+import time
 import uuid
 from copy import copy
 from dataclasses import dataclass
@@ -47,6 +48,9 @@ TARIFF_INTELLIGENT_HEAT = "Octopus Heat"
 DISPLAY_NAME_OCTOPUS_GO = "octopus go"
 DISPLAY_NAME_OCTOPUS_HEAT = "octopus heat"
 DISPLAY_NAME_DYNAMIC_OCTOPUS = "dynamicoctopus"
+REQUEST_TIMEOUT_SECONDS = 30
+REQUEST_TIMEOUT_RETRIES = 2
+REQUEST_TIMEOUT_RETRY_DELAY_SECONDS = 2
 
 
 class _WindowsGuid(ctypes.Structure):
@@ -1085,6 +1089,39 @@ class OctopusGermanyClient:
         self.last_error_kind = kind
         self.last_error_message = message
 
+    def _post_with_retry(self, *, json_payload: dict, headers: dict | None = None):
+        last_retryable_error: requests.exceptions.RequestException | None = None
+        attempts = REQUEST_TIMEOUT_RETRIES + 1
+
+        for attempt in range(1, attempts + 1):
+            try:
+                return requests.post(
+                    GRAPHQL_URL,
+                    json=json_payload,
+                    headers=headers,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ) as exc:
+                last_retryable_error = exc
+                if attempt >= attempts:
+                    raise
+                error_name = exc.__class__.__name__
+                print(
+                    f"{error_name} beim Request, neuer Versuch "
+                    f"{attempt + 1}/{attempts} in {REQUEST_TIMEOUT_RETRY_DELAY_SECONDS}s..."
+                )
+                self._log_debug(
+                    f"Retrying after {error_name.lower()} "
+                    f"({attempt}/{attempts - 1} retries used): {exc}"
+                )
+                time.sleep(REQUEST_TIMEOUT_RETRY_DELAY_SECONDS)
+
+        if last_retryable_error is not None:
+            raise last_retryable_error
+
     def authenticate(self) -> bool:
         """Authenticate and get JWT token."""
         self._clear_last_error()
@@ -1107,7 +1144,7 @@ class OctopusGermanyClient:
             print("="*80)
         
         try:
-            response = requests.post(GRAPHQL_URL, json=payload)
+            response = self._post_with_retry(json_payload=payload)
             
             if self.debug:
                 print("\n" + "="*80)
@@ -1134,6 +1171,14 @@ class OctopusGermanyClient:
             self._log_debug(f"Got token (first 20 chars): {self.token[:20]}...")
             return True
             
+        except requests.exceptions.Timeout as e:
+            error_message = (
+                "Zeitueberschreitung bei der Authentifizierung: "
+                f"{e}"
+            )
+            self._set_last_error("timeout", error_message)
+            print(error_message)
+            return False
         except requests.exceptions.RequestException as e:
             error_message = f"Netzwerkfehler bei der Authentifizierung: {e}"
             self._set_last_error("network", error_message)
@@ -1164,7 +1209,10 @@ class OctopusGermanyClient:
             print("="*80)
         
         try:
-            response = requests.post(GRAPHQL_URL, json=payload, headers=headers)
+            response = self._post_with_retry(
+                json_payload=payload,
+                headers=headers,
+            )
             
             if self.debug:
                 print("\n" + "="*80)
@@ -1191,6 +1239,11 @@ class OctopusGermanyClient:
             self._clear_last_error()
             return data.get("data", {})
             
+        except requests.exceptions.Timeout as e:
+            error_message = f"Zeitueberschreitung: {e}"
+            self._set_last_error("timeout", error_message)
+            print(error_message)
+            return {}
         except requests.exceptions.RequestException as e:
             error_message = f"Netzwerkfehler: {e}"
             self._set_last_error("network", error_message)

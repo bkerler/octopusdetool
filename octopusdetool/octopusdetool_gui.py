@@ -1473,6 +1473,24 @@ QDateEdit::drop-down {{
             if self.progress_bar.isVisible() and self.scroll_area.verticalScrollBar().maximum() > 0:
                 self._fit_window_to_content()
 
+    def _raise_client_error(self, client, action: str, fallback_message: str) -> None:
+        if client.last_error_kind == "timeout":
+            raise Exception(
+                f"Zeitueberschreitung {action}. "
+                "Der Octopus-Server hat nicht rechtzeitig geantwortet. Bitte spaeter erneut versuchen."
+            )
+        if client.last_error_kind == "network":
+            raise Exception(
+                f"Keine Internetverbindung erkannt oder Netzwerkfehler {action}. "
+                "Bitte Verbindung pruefen und erneut versuchen."
+            )
+        if client.last_error_kind == "response":
+            raise Exception(
+                "Der Octopus-Server hat unerwartet geantwortet. "
+                "Bitte spaeter erneut versuchen."
+            )
+        raise Exception(fallback_message)
+
     def _show_error(self, message: str) -> None:
         QMessageBox.critical(self.window, "Fehler", message)
 
@@ -3245,17 +3263,9 @@ QDateEdit::drop-down {{
                     )
 
                     if not client.authenticate():
-                        if client.last_error_kind == "network":
-                            raise Exception(
-                                "Keine Internetverbindung erkannt oder Netzwerkfehler bei der Anmeldung. "
-                                "Bitte Verbindung pruefen und erneut versuchen."
-                            )
-                        if client.last_error_kind == "response":
-                            raise Exception(
-                                "Der Octopus-Server hat unerwartet geantwortet. "
-                                "Bitte spaeter erneut versuchen."
-                            )
-                        raise Exception(
+                        self._raise_client_error(
+                            client,
+                            "bei der Anmeldung",
                             "Authentifizierung fehlgeschlagen! Ueberpruefen Sie Ihre E-Mail und Ihr Passwort."
                         )
 
@@ -3263,12 +3273,11 @@ QDateEdit::drop-down {{
                     accounts = client.get_accounts_from_viewer()
 
                     if not accounts:
-                        if client.last_error_kind == "network":
-                            raise Exception(
-                                "Keine Internetverbindung erkannt oder Netzwerkfehler beim Laden des Kontos. "
-                                "Bitte Verbindung pruefen und erneut versuchen."
-                            )
-                        raise Exception("Kein Konto gefunden! Ueberpruefen Sie Ihre Zugangsdaten.")
+                        self._raise_client_error(
+                            client,
+                            "beim Laden des Kontos",
+                            "Kein Konto gefunden! Ueberpruefen Sie Ihre Zugangsdaten.",
+                        )
 
                     if len(accounts) > 1:
                         account_list = "\n".join(
@@ -3310,12 +3319,9 @@ QDateEdit::drop-down {{
                             raise Exception("Kundendaten konnten nicht geladen werden")
                         meter_info = client.find_smart_meter(account_number)
                         if not meter_info:
-                            if client.last_error_kind == "network":
-                                raise Exception(
-                                    "Keine Internetverbindung erkannt oder Netzwerkfehler beim Laden der Zaehlerdaten. "
-                                    "Bitte Verbindung pruefen und erneut versuchen."
-                                )
-                            raise Exception(
+                            self._raise_client_error(
+                                client,
+                                "beim Laden der Zaehlerdaten",
                                 "Kein Smart Meter fuer diesen Account gefunden!\n\n"
                                 "Moegliche Gruende:\n"
                                 "- Smart meter noch nicht eingerichtet\n"
@@ -3348,10 +3354,11 @@ QDateEdit::drop-down {{
                             progress_callback=update_progress,
                         )
 
-                        if client.last_error_kind == "network":
-                            raise Exception(
-                                "Keine Internetverbindung erkannt oder Netzwerkfehler beim Abrufen der Verbrauchsdaten. "
-                                "Bitte Verbindung pruefen und erneut versuchen."
+                        if client.last_error_kind in {"network", "timeout", "response"}:
+                            self._raise_client_error(
+                                client,
+                                "beim Abrufen der Verbrauchsdaten",
+                                "Verbrauchsdaten konnten nicht geladen werden.",
                             )
 
                         if not new_readings and not self.existing_data:
@@ -3378,12 +3385,9 @@ QDateEdit::drop-down {{
                                 debug=self.debug_checkbox.isChecked(),
                             )
                             if not client.authenticate():
-                                if client.last_error_kind == "network":
-                                    raise Exception(
-                                        "Keine Internetverbindung erkannt oder Netzwerkfehler bei der Anmeldung. "
-                                        "Bitte Verbindung pruefen und erneut versuchen."
-                                    )
-                                raise Exception(
+                                self._raise_client_error(
+                                    client,
+                                    "bei der Anmeldung",
                                     "Authentifizierung fehlgeschlagen! Ueberpruefen Sie Ihre E-Mail und Ihr Passwort."
                                 )
 
