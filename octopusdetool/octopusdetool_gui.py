@@ -1933,9 +1933,14 @@ QDateEdit::drop-down {{
 
         start_dt = datetime(start_date.year, start_date.month, start_date.day)
         end_dt = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
+        running_meter_reading = 0.0
 
-        for reading in self.existing_data:
+        for reading in sorted(
+            self.existing_data,
+            key=lambda item: normalize_datetime(item["start"]),
+        ):
             reading_start = normalize_datetime(reading["start"])
+            running_meter_reading += float(reading["consumption_kwh"])
             if reading_start < start_dt or reading_start >= end_dt:
                 continue
 
@@ -1954,6 +1959,7 @@ QDateEdit::drop-down {{
                 buckets[index].rate_values_kwh.get(rate_name, 0.0)
                 + float(reading["consumption_kwh"])
             )
+            buckets[index].meter_reading_kwh = running_meter_reading
 
         return buckets, title, first_column_title, start_date, end_date
 

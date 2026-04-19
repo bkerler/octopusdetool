@@ -21,6 +21,7 @@ class DisplayBucket:
     axis_label: str
     tooltip_label: str
     rate_values_kwh: dict[str, float] = field(default_factory=dict)
+    meter_reading_kwh: float = 0.0
 
     @property
     def total_kwh(self) -> float:
@@ -48,9 +49,13 @@ class TariffChartView(QChartView):
         self._rate_prices_ct: dict[str, float] = {}
         self._category_axis_title = ""
         self._value_axis_title = ""
+        self._series: QStackedBarSeries | None = None
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setStyleSheet("background: transparent; border: none;")
         self.setMinimumHeight(380)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         self.setChart(self._create_chart())
 
     def update_buckets(
@@ -111,6 +116,7 @@ class TariffChartView(QChartView):
             empty_set.hovered.connect(self._on_bar_hovered)
             series.append(empty_set)
 
+        self._series = series
         chart.addSeries(series)
 
         axis_x = QBarCategoryAxis()
@@ -193,6 +199,7 @@ class TariffChartView(QChartView):
 
         bucket = self._buckets[index]
         lines = [bucket.tooltip_label]
+        lines.append(f"Zaehlerstand: {self._format_decimal(bucket.meter_reading_kwh, 3)} kWh")
         if self._show_currency:
             lines.append(f"Gesamt: {self._format_decimal(bucket.total_cost_eur(self._rate_prices_ct), 2)} EUR")
             for rate_name in self._rate_order:
@@ -209,7 +216,7 @@ class TariffChartView(QChartView):
                 if rate_kwh:
                     lines.append(f"{rate_name}: {self._format_decimal(rate_kwh, 3)} kWh")
 
-        QToolTip.showText(QCursor.pos(), "\n".join(lines), self)
+        QToolTip.showText(QCursor.pos(), "\n".join(lines), self.viewport())
 
     @staticmethod
     def _format_decimal(value: float, decimals: int) -> str:
