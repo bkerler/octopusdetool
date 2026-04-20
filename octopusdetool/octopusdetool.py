@@ -46,7 +46,11 @@ DEFAULT_TARIFF_HEAT_HIGH_CT = 33.51
 DEFAULT_MONTHLY_BASE_PRICE_EUR = 15.94
 DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR = 14.50
 TARIFF_INTELLIGENT_GO = "Intelligent Octopus Go"
+TARIFF_INTELLIGENT_12 = "Intelligent Octopus 12"
 TARIFF_INTELLIGENT_HEAT = "Octopus Heat"
+TARIFF_DYNAMIC = "Dynamic Octopus"
+TARIFF_TWO_ZONES = "two_zones"
+TARIFF_THREE_ZONES = "three_zones"
 DISPLAY_NAME_OCTOPUS_GO = "octopus go"
 DISPLAY_NAME_OCTOPUS_HEAT = "octopus heat"
 DISPLAY_NAME_DYNAMIC_OCTOPUS = "dynamicoctopus"
@@ -98,10 +102,60 @@ class TariffRate:
     windows: tuple[tuple[str, str], ...]
 
 
+def get_demo_tariff_profile(mode: str) -> tuple[str, TariffSettings, list[TariffRate]]:
+    normalized = str(mode).strip().lower()
+    if normalized in {"2", "two", "2-zones", "two_zones"}:
+        settings = TariffSettings(
+            tariff_type=TARIFF_TWO_ZONES,
+            low_ct=12.0,
+            standard_ct=29.0,
+            high_ct=0.0,
+            monthly_base_price_eur=14.90,
+        )
+        rates = [
+            TariffRate("Demo Low", 12.0, (("00:00", "05:00"),)),
+            TariffRate("Demo Standard", 29.0, (("05:00", "24:00"),)),
+        ]
+        return TARIFF_INTELLIGENT_12, settings, rates
+
+    if normalized in {"3", "three", "3-zones", "three_zones"}:
+        settings = TariffSettings(
+            tariff_type=TARIFF_THREE_ZONES,
+            low_ct=21.5,
+            standard_ct=28.5,
+            high_ct=33.5,
+            monthly_base_price_eur=14.50,
+        )
+        rates = [
+            TariffRate("Demo Low", 21.5, (("02:00", "06:00"), ("12:00", "16:00"))),
+            TariffRate("Demo Standard", 28.5, (("06:00", "18:00"), ("21:00", "02:00"))),
+            TariffRate("Demo High", 33.5, (("18:00", "21:00"),)),
+        ]
+        return TARIFF_INTELLIGENT_HEAT, settings, rates
+
+    if normalized in {"dynamically", "dynamic", "dynamicoctopus"}:
+        settings = TariffSettings(
+            tariff_type=TARIFF_DYNAMIC,
+            low_ct=10.0,
+            standard_ct=18.0,
+            high_ct=26.0,
+            monthly_base_price_eur=15.00,
+        )
+        rates = [
+            TariffRate("Demo Offpeak", 10.0, (("00:00", "04:00"),)),
+            TariffRate("Demo Shoulder", 18.0, (("04:00", "08:00"), ("22:00", "24:00"))),
+            TariffRate("Demo Peak", 26.0, (("08:00", "18:00"),)),
+            TariffRate("Demo Superpeak", 31.0, (("18:00", "22:00"),)),
+        ]
+        return TARIFF_DYNAMIC, settings, rates
+
+    raise ValueError(f"Unknown demo tariff mode: {mode}")
+
+
 def get_default_tariff_settings_for_type(tariff_type: str) -> TariffSettings:
-    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+    if tariff_type == TARIFF_THREE_ZONES:
         return TariffSettings(
-            tariff_type=TARIFF_INTELLIGENT_HEAT,
+            tariff_type=TARIFF_THREE_ZONES,
             low_ct=DEFAULT_TARIFF_HEAT_LOW_CT,
             standard_ct=DEFAULT_TARIFF_HEAT_STANDARD_CT,
             high_ct=DEFAULT_TARIFF_HEAT_HIGH_CT,
@@ -109,7 +163,7 @@ def get_default_tariff_settings_for_type(tariff_type: str) -> TariffSettings:
         )
 
     return TariffSettings(
-        tariff_type=TARIFF_INTELLIGENT_GO,
+        tariff_type=TARIFF_TWO_ZONES,
         low_ct=DEFAULT_TARIFF_GO_CT,
         standard_ct=DEFAULT_TARIFF_STANDARD_CT,
         high_ct=0.0,
@@ -316,7 +370,7 @@ def detect_excel_template_type(workbook_path: Path | str) -> str:
     try:
         import openpyxl
     except ImportError:
-        return TARIFF_INTELLIGENT_GO
+        return TARIFF_TWO_ZONES
 
     try:
         workbook = openpyxl.load_workbook(workbook_path, data_only=True, read_only=True)
@@ -330,13 +384,13 @@ def detect_excel_template_type(workbook_path: Path | str) -> str:
             if label == "Startdatum":
                 break
         workbook.close()
-        return TARIFF_INTELLIGENT_HEAT if tariff_zone_count >= 3 else TARIFF_INTELLIGENT_GO
+        return TARIFF_THREE_ZONES if tariff_zone_count >= 3 else TARIFF_TWO_ZONES
     except Exception:
-        return TARIFF_INTELLIGENT_GO
+        return TARIFF_TWO_ZONES
 
 
 def get_excel_layout(tariff_type: str) -> dict[str, str]:
-    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+    if tariff_type == TARIFF_THREE_ZONES:
         return {
             "tariff_low": "B3",
             "tariff_standard": "B4",
@@ -492,7 +546,7 @@ def create_heat_excel_template(source_path: Path, target_path: Path) -> Path:
     return target_path
 
 
-def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
+def ensure_excel_template(tariff_type: str = TARIFF_TWO_ZONES):
     """Copy the requested Excel template to smartmeter_data if it doesn't exist."""
     smartmeter_folder = ensure_smartmeter_data_folder()
 
@@ -508,8 +562,8 @@ def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
                 print(f"Excel-Vorlage kopiert nach: {target}")
             except OSError:
                 pass
-        elif tariff_type == TARIFF_INTELLIGENT_HEAT:
-            stock_resource = _get_bundled_excel_template_resource(TARIFF_INTELLIGENT_GO)
+        elif tariff_type == TARIFF_THREE_ZONES:
+            stock_resource = _get_bundled_excel_template_resource(TARIFF_TWO_ZONES)
             if stock_resource.is_file():
                 try:
                     with package_resources.as_file(stock_resource) as stock_source_path:
@@ -521,8 +575,8 @@ def ensure_excel_template(tariff_type: str = TARIFF_INTELLIGENT_GO):
     if target.exists():
         return target
 
-    if tariff_type == TARIFF_INTELLIGENT_HEAT:
-        stock_template = get_bundled_excel_template_path(TARIFF_INTELLIGENT_GO)
+    if tariff_type == TARIFF_THREE_ZONES:
+        stock_template = get_bundled_excel_template_path(TARIFF_TWO_ZONES)
         if stock_template.exists():
             try:
                 create_heat_excel_template(stock_template, target)
@@ -567,11 +621,11 @@ def cleanup_app_config_folder() -> None:
                 pass
 
 
-def get_default_excel_path(tariff_type: str = TARIFF_INTELLIGENT_GO) -> Path:
+def get_default_excel_path(tariff_type: str = TARIFF_TWO_ZONES) -> Path:
     """Get the default Excel output path shown in the UI/CLI."""
     filename = (
         HEAT_EXCEL_TEMPLATE_FILENAME
-        if tariff_type == TARIFF_INTELLIGENT_HEAT
+        if tariff_type == TARIFF_THREE_ZONES
         else EXCEL_TEMPLATE_FILENAME
     )
     return get_smartmeter_data_folder() / filename
@@ -580,7 +634,7 @@ def get_default_excel_path(tariff_type: str = TARIFF_INTELLIGENT_GO) -> Path:
 def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, float | str]:
     """Read tariff defaults from the Excel template, falling back to built-in values."""
     defaults = {
-        "tariff_type": TARIFF_INTELLIGENT_GO,
+        "tariff_type": TARIFF_TWO_ZONES,
         "tariff_go_ct": DEFAULT_TARIFF_GO_CT,
         "tariff_standard_ct": DEFAULT_TARIFF_STANDARD_CT,
         "tariff_heat_low_ct": DEFAULT_TARIFF_HEAT_LOW_CT,
@@ -602,7 +656,7 @@ def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, f
     try:
         detected_type = detect_excel_template_type(workbook_path)
         defaults["tariff_type"] = detected_type
-        if detected_type == TARIFF_INTELLIGENT_HEAT:
+        if detected_type == TARIFF_THREE_ZONES:
             defaults["monthly_base_price_eur"] = DEFAULT_TARIFF_HEAT_MONTHLY_BASE_PRICE_EUR
         layout = get_excel_layout(detected_type)
         wb = openpyxl.load_workbook(workbook_path, data_only=True, read_only=True)
@@ -610,8 +664,8 @@ def load_excel_tariff_settings(template_path: Path | None = None) -> dict[str, f
         values = {
             "tariff_go_ct": ws[layout["tariff_low"]].value if layout["tariff_low"] else None,
             "tariff_standard_ct": ws[layout["tariff_standard"]].value if layout["tariff_standard"] else None,
-            "tariff_heat_low_ct": ws[layout["tariff_low"]].value if detected_type == TARIFF_INTELLIGENT_HEAT else None,
-            "tariff_heat_standard_ct": ws[layout["tariff_standard"]].value if detected_type == TARIFF_INTELLIGENT_HEAT else None,
+            "tariff_heat_low_ct": ws[layout["tariff_low"]].value if detected_type == TARIFF_THREE_ZONES else None,
+            "tariff_heat_standard_ct": ws[layout["tariff_standard"]].value if detected_type == TARIFF_THREE_ZONES else None,
             "tariff_heat_high_ct": ws[layout["tariff_high"]].value if layout["tariff_high"] else None,
             "monthly_base_price_eur": ws[layout["base_price"]].value,
         }
@@ -642,7 +696,7 @@ def get_tariff_rate_ct(
     local_start = to_local_datetime(reading_start)
     hour = local_start.hour
 
-    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+    if tariff_type == TARIFF_THREE_ZONES:
         if hour in {2, 3, 4, 5, 12, 13, 14, 15}:
             return tariff_go_ct
         if hour in {18, 19, 20}:
@@ -656,7 +710,7 @@ def classify_tariff_zone(reading_start: datetime, tariff_type: str) -> str:
     local_start = to_local_datetime(reading_start)
     hour = local_start.hour
 
-    if tariff_type == TARIFF_INTELLIGENT_HEAT:
+    if tariff_type == TARIFF_THREE_ZONES:
         if hour in {2, 3, 4, 5, 12, 13, 14, 15}:
             return "low"
         if hour in {18, 19, 20}:
@@ -702,6 +756,12 @@ def _extract_tariff_rates(unit_rate_information: dict | None) -> list[TariffRate
         )
 
     return rates
+
+
+def _tariff_type_from_rates(rates: list[TariffRate]) -> str | None:
+    if not rates:
+        return None
+    return TARIFF_INTELLIGENT_HEAT if len(rates) >= 3 else TARIFF_INTELLIGENT_GO
 
 
 def _extract_monthly_base_price(agreement_data: dict) -> float | None:
@@ -786,55 +846,36 @@ def map_rate_structure_to_tariff_settings(
     if not rates:
         return None
 
-    go_window = (("00:00", "05:00"),)
-    heat_low_windows = (("02:00", "06:00"), ("12:00", "16:00"))
-    heat_high_windows = (("18:00", "21:00"),)
-
-    normalized_display_name = agreement_display_name.strip().lower()
-
-    if DISPLAY_NAME_OCTOPUS_HEAT in normalized_display_name:
-        low_rate = next((rate for rate in rates if rate.windows == heat_low_windows), None)
-        high_rate = next((rate for rate in rates if rate.windows == heat_high_windows), None)
-        standard_candidates = [
-            rate for rate in rates if rate is not low_rate and rate is not high_rate
-        ]
-        if low_rate and high_rate and len(standard_candidates) == 1:
-            return TariffSettings(
-                tariff_type=TARIFF_INTELLIGENT_HEAT,
-                low_ct=low_rate.rate_ct,
-                standard_ct=standard_candidates[0].rate_ct,
-                high_ct=high_rate.rate_ct,
-                monthly_base_price_eur=monthly_base_price_eur,
-            )
-
-        # Relaxed compatibility for Heat: if the live tariff exposes exactly
-        # three distinct price levels, keep Excel export enabled even when the
-        # provider's time windows do not exactly match the bundled workbook's
-        # fixed labels. We map the lowest/middle/highest rate to the workbook's
-        # low/standard/high price fields.
+    inferred_type = _tariff_type_from_rates(rates)
+    if inferred_type == TARIFF_THREE_ZONES and len(rates) >= 3:
         unique_prices = sorted({rate.rate_ct for rate in rates})
         if len(unique_prices) == 3:
             return TariffSettings(
-                tariff_type=TARIFF_INTELLIGENT_HEAT,
+                tariff_type=TARIFF_THREE_ZONES,
                 low_ct=unique_prices[0],
                 standard_ct=unique_prices[1],
                 high_ct=unique_prices[2],
                 monthly_base_price_eur=monthly_base_price_eur,
             )
-        return None
+        return TariffSettings(
+            tariff_type=TARIFF_THREE_ZONES,
+            low_ct=rates[0].rate_ct,
+            standard_ct=rates[1].rate_ct,
+            high_ct=rates[2].rate_ct,
+            monthly_base_price_eur=monthly_base_price_eur,
+        )
 
-    if DISPLAY_NAME_OCTOPUS_GO in normalized_display_name and "lite" not in normalized_display_name:
-        low_rate = next((rate for rate in rates if rate.windows == go_window), None)
-        standard_candidates = [rate for rate in rates if rate is not low_rate]
-        standard_prices = {rate.rate_ct for rate in standard_candidates}
-        if low_rate and standard_candidates and len(standard_prices) == 1:
-            return TariffSettings(
-                tariff_type=TARIFF_INTELLIGENT_GO,
-                low_ct=low_rate.rate_ct,
-                standard_ct=standard_candidates[0].rate_ct,
-                high_ct=0.0,
-                monthly_base_price_eur=monthly_base_price_eur,
-            )
+    if inferred_type == TARIFF_TWO_ZONES and len(rates) >= 2:
+        unique_prices = sorted({rate.rate_ct for rate in rates})
+        low_price = unique_prices[0]
+        standard_price = unique_prices[1] if len(unique_prices) > 1 else unique_prices[0]
+        return TariffSettings(
+            tariff_type=TARIFF_TWO_ZONES,
+            low_ct=low_price,
+            standard_ct=standard_price,
+            high_ct=0.0,
+            monthly_base_price_eur=monthly_base_price_eur,
+        )
 
     return None
 
@@ -1038,6 +1079,32 @@ query GetSmartUsage(
     }
 }
 """
+
+
+def _normalize_reading_direction(direction: str | None) -> str:
+    normalized = str(direction or "CONSUMPTION").upper()
+    return normalized if normalized in {"CONSUMPTION", "GENERATION"} else "CONSUMPTION"
+
+
+def _extract_reading_direction(node: dict) -> str:
+    meta_data = node.get("metaData") or {}
+    utility_filters = meta_data.get("utilityFilters")
+
+    if isinstance(utility_filters, list):
+        candidate = utility_filters[0] if utility_filters else {}
+    elif isinstance(utility_filters, dict):
+        candidate = utility_filters
+    else:
+        candidate = {}
+
+    if not isinstance(candidate, dict):
+        candidate = {}
+
+    electricity_filters = candidate.get("electricityFilters")
+    if not isinstance(electricity_filters, dict):
+        electricity_filters = {}
+
+    return _normalize_reading_direction(electricity_filters.get("readingDirection"))
 
 METER_READINGS_QUERY = """
 query getMeterReadingsElectricity($accountNumber: String!, $meterId: ID!, $cursor: String) {
@@ -1346,11 +1413,7 @@ class OctopusGermanyClient:
         monthly_base_price_eur = _extract_monthly_base_price(agreement_data)
         if monthly_base_price_eur is None:
             print("[WARN] Konnte Grundpreis nicht aus API extrahieren, verwende Standardwert.")
-            defaults = get_default_tariff_settings_for_type(
-                TARIFF_INTELLIGENT_HEAT
-                if DISPLAY_NAME_OCTOPUS_HEAT in agreement.display_name.strip().lower()
-                else TARIFF_INTELLIGENT_GO
-            )
+            defaults = get_default_tariff_settings_for_type(TARIFF_INTELLIGENT_GO)
             monthly_base_price_eur = defaults.monthly_base_price_eur
         else:
             print(f"[INFO] Grundpreis aus API: {monthly_base_price_eur} EUR/Monat")
@@ -1380,6 +1443,7 @@ class OctopusGermanyClient:
         property_id: str,
         market_supply_point_id: str,
         day: datetime | date,
+        reading_direction: str = "CONSUMPTION",
     ) -> list[dict]:
         """Fetch a single local day of hourly consumption via GetSmartUsage."""
         if isinstance(day, datetime):
@@ -1402,7 +1466,7 @@ class OctopusGermanyClient:
                     "electricityFilters": {
                         "readingFrequencyType": "HOUR_INTERVAL",
                         "marketSupplyPointId": str(market_supply_point_id),
-                        "readingDirection": "CONSUMPTION",
+                        "readingDirection": _normalize_reading_direction(reading_direction),
                     }
                 }
             ],
@@ -1424,11 +1488,15 @@ class OctopusGermanyClient:
             try:
                 start_time = normalize_datetime(datetime.fromisoformat(start_at))
                 end_time = normalize_datetime(datetime.fromisoformat(end_at))
+                direction = _extract_reading_direction(node)
                 intervals.append(
                     {
                         "start": start_time,
                         "end": end_time,
+                        "direction": direction,
+                        "energy_kwh": float(value),
                         "consumption_kwh": float(value),
+                        "net_kwh": float(value) if direction == "CONSUMPTION" else -float(value),
                         "duration_seconds": int((end_time - start_time).total_seconds()),
                         "unit": node.get("unit", "kWh"),
                         "source": node.get("source", "GetSmartUsage"),
@@ -1450,6 +1518,7 @@ class OctopusGermanyClient:
         period_from: datetime | None = None,
         period_to: datetime | None = None,
         progress_callback=None,
+        reading_direction: str = "CONSUMPTION",
     ) -> list[dict]:
         """Fetch hourly consumption day-by-day via GetSmartUsage."""
         today = get_today_start()
@@ -1473,6 +1542,7 @@ class OctopusGermanyClient:
                 property_id=property_id,
                 market_supply_point_id=market_supply_point_id,
                 day=current_day,
+                reading_direction=reading_direction,
             )
             for interval in day_intervals:
                 interval_start = normalize_datetime(interval["start"])
@@ -1639,6 +1709,7 @@ class OctopusGermanyClient:
                 start_at = node.get("startAt")
                 end_at = node.get("endAt")
                 duration = node.get("durationInSeconds")
+                direction = _extract_reading_direction(node)
                 
                 if value is not None and start_at and end_at:
                     try:
@@ -1652,7 +1723,10 @@ class OctopusGermanyClient:
                         all_intervals.append({
                             "start": start_time,
                             "end": end_time,
+                            "direction": direction,
+                            "energy_kwh": float(value),
                             "consumption_kwh": float(value),
+                            "net_kwh": float(value) if direction == "CONSUMPTION" else -float(value),
                             "duration_seconds": duration,
                             "unit": node.get("unit", "kWh"),
                             "api_start": str(start_at),
@@ -1760,10 +1834,18 @@ def _resolve_meter_reading_offset(
             if existing_value is None:
                 continue
             try:
-                return float(existing_value) - float(reading["consumption_kwh"])
+                return float(existing_value) - float(reading.get("net_kwh", reading["consumption_kwh"]))
             except (TypeError, ValueError, KeyError):
                 continue
         return 0.0
+
+    if isinstance(reference_reading, list):
+        reference_reading = next(
+            (item for item in reference_reading if isinstance(item, dict)),
+            None,
+        )
+        if reference_reading is None:
+            return 0.0
 
     reference_time = reference_reading.get("read_at")
     reference_value = reference_reading.get("value")
@@ -1780,7 +1862,7 @@ def _resolve_meter_reading_offset(
     for reading in sorted_readings:
         reading_end = _reading_sort_value(reading["end"])
         if reading_end <= normalized_reference_time:
-            consumption_until_anchor += float(reading["consumption_kwh"])
+            consumption_until_anchor += float(reading.get("net_kwh", reading["consumption_kwh"]))
         else:
             break
 
@@ -1792,6 +1874,11 @@ def build_readings_with_meter_reading(
     reference_reading: dict | None = None,
 ) -> list[dict]:
     """Return sorted readings enriched with cumulative meter_reading_kwh."""
+    if isinstance(reference_reading, list):
+        reference_reading = next(
+            (item for item in reference_reading if isinstance(item, dict)),
+            None,
+        )
     sorted_readings = sorted(
         readings,
         key=lambda reading: _reading_sort_value(reading["start"]),
@@ -1803,10 +1890,13 @@ def build_readings_with_meter_reading(
     )
     enriched_readings: list[dict] = []
     for reading in sorted_readings:
-        consumption_value = float(reading["consumption_kwh"])
-        running_meter_reading += consumption_value
+        net_value = float(reading.get("net_kwh", reading["consumption_kwh"]))
+        running_meter_reading += net_value
         enriched_reading = dict(reading)
         enriched_reading["meter_reading_kwh"] = round(running_meter_reading, 4)
+        enriched_reading.setdefault("direction", "CONSUMPTION")
+        enriched_reading.setdefault("energy_kwh", abs(float(reading["consumption_kwh"])))
+        enriched_reading.setdefault("net_kwh", net_value)
         enriched_readings.append(enriched_reading)
 
     return enriched_readings
@@ -1832,7 +1922,10 @@ def convert_readings_for_export(
                 if isinstance(reading['end'], datetime) and use_local_time
                 else reading['end'].isoformat() if isinstance(reading['end'], datetime) else reading['end']
             ),
+            'direction': reading.get('direction', 'CONSUMPTION'),
+            'energy_kwh': abs(float(reading.get('energy_kwh', reading['consumption_kwh']))),
             'consumption_kwh': reading['consumption_kwh'],
+            'net_kwh': reading.get('net_kwh', float(reading['consumption_kwh'])),
             'meter_reading_kwh': reading['meter_reading_kwh'],
             'duration_seconds': reading.get('duration_seconds'),
             'unit': reading.get('unit', 'kWh'),
@@ -2122,13 +2215,21 @@ def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
                         # Fallback to ISO format for backwards compatibility
                         start = normalize_datetime(datetime.fromisoformat(row['start']))
                         end = normalize_datetime(datetime.fromisoformat(row['end']))
-                    consumption = float(row['consumption_kwh'])
+                    direction = _normalize_reading_direction(row.get('direction'))
+                    energy = row.get('energy_kwh', row.get('consumption_kwh'))
+                    net_value = row.get('net_kwh')
+                    if net_value in (None, ''):
+                        net_value = float(energy) if direction == "CONSUMPTION" else -float(energy)
+                    consumption = float(row.get('consumption_kwh', energy))
                     
                     reading = {
                         'start': start,
                         'end': end,
+                        'direction': direction,
+                        'energy_kwh': abs(float(energy)),
                         'consumption_kwh': consumption
                     }
+                    reading['net_kwh'] = float(net_value)
                     if "T" in row['start']:
                         reading['api_start'] = row['start']
                     if "T" in row['end']:
@@ -2181,11 +2282,19 @@ def read_existing_json(json_path: Path) -> tuple[list, datetime | None]:
         try:
             start = normalize_datetime(datetime.fromisoformat(row['start']))
             end = normalize_datetime(datetime.fromisoformat(row['end']))
+            direction = _normalize_reading_direction(row.get('direction'))
+            energy = row.get('energy_kwh', row.get('consumption_kwh'))
+            net_value = row.get('net_kwh')
+            if net_value in (None, ''):
+                net_value = float(energy) if direction == "CONSUMPTION" else -float(energy)
             reading = {
                 'start': start,
                 'end': end,
+                'direction': direction,
+                'energy_kwh': abs(float(energy)),
                 'consumption_kwh': float(row['consumption_kwh']),
             }
+            reading['net_kwh'] = float(net_value)
             if row.get('api_start'):
                 reading['api_start'] = str(row['api_start'])
             if row.get('api_end'):
@@ -2242,15 +2351,18 @@ def write_consumption_csv(readings: list[dict], csv_path: Path) -> bool:
     try:
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['start', 'end', 'consumption_kwh'])
+            writer.writerow(['start', 'end', 'direction', 'energy_kwh', 'consumption_kwh', 'net_kwh'])
             for reading in readings:
                 writer.writerow([
                     reading.get('api_start')
                     or (reading['start'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['start'], datetime) else reading['start']),
                     reading.get('api_end')
                     or (reading['end'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['end'], datetime) else reading['end']),
+                    reading.get('direction', 'CONSUMPTION'),
+                    reading.get('energy_kwh', abs(float(reading.get('consumption_kwh', 0.0)))),
                     reading.get('api_value')
                     or str(reading['consumption_kwh']),
+                    reading.get('net_kwh', reading.get('consumption_kwh', 0.0)),
                 ])
         return True
     except Exception as e:
@@ -2352,7 +2464,7 @@ def readings_changed(existing_readings: list[dict], merged_readings: list[dict])
             return True
         if current_end != merged_end:
             return True
-        if float(current['consumption_kwh']) != float(merged['consumption_kwh']):
+        if float(current.get('net_kwh', current['consumption_kwh'])) != float(merged.get('net_kwh', merged['consumption_kwh'])):
             return True
 
     return False
@@ -2394,12 +2506,15 @@ def save_data(
         csv_path = output_path.with_suffix('.csv')
         with open(csv_path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
-            writer.writerow(['start', 'end', 'consumption_kwh', 'meter_reading_kwh'])
+            writer.writerow(['start', 'end', 'direction', 'energy_kwh', 'consumption_kwh', 'net_kwh', 'meter_reading_kwh'])
             for reading in export_rows:
                 writer.writerow([
                     format_datetime(reading['start'], use_local_time=use_local_time) if isinstance(reading['start'], datetime) else reading['start'],
                     format_datetime(reading['end'], use_local_time=use_local_time) if isinstance(reading['end'], datetime) else reading['end'],
+                    reading.get('direction', 'CONSUMPTION'),
+                    reading.get('energy_kwh', abs(float(reading['consumption_kwh']))),
                     reading['consumption_kwh'],
+                    reading.get('net_kwh', reading['consumption_kwh']),
                     reading['meter_reading_kwh'],
                 ])
         print(f"{len(unique_data)} Einträge gespeichert nach {csv_path}")

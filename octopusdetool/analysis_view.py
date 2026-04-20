@@ -21,11 +21,20 @@ class DisplayBucket:
     axis_label: str
     tooltip_label: str
     rate_values_kwh: dict[str, float] = field(default_factory=dict)
+    generation_kwh: float = 0.0
     meter_reading_kwh: float = 0.0
 
     @property
     def total_kwh(self) -> float:
         return sum(self.rate_values_kwh.values())
+
+    @property
+    def total_generation_kwh(self) -> float:
+        return self.generation_kwh
+
+    @property
+    def net_kwh(self) -> float:
+        return self.total_kwh - self.total_generation_kwh
 
     def rate_kwh(self, rate_name: str) -> float:
         return self.rate_values_kwh.get(rate_name, 0.0)
@@ -45,6 +54,7 @@ class TariffChartView(QChartView):
         super().__init__(parent)
         self._buckets: list[DisplayBucket] = []
         self._show_currency = False
+        self._show_generation = False
         self._rate_order: list[str] = []
         self._rate_prices_ct: dict[str, float] = {}
         self._category_axis_title = ""
@@ -63,6 +73,7 @@ class TariffChartView(QChartView):
         buckets: Sequence[DisplayBucket],
         *,
         show_currency: bool,
+        show_generation: bool,
         rate_order: Sequence[str],
         rate_prices_ct: dict[str, float],
         category_axis_title: str,
@@ -70,6 +81,7 @@ class TariffChartView(QChartView):
     ) -> None:
         self._buckets = list(buckets)
         self._show_currency = show_currency
+        self._show_generation = show_generation
         self._rate_order = list(rate_order)
         self._rate_prices_ct = dict(rate_prices_ct)
         self._category_axis_title = category_axis_title
@@ -108,6 +120,20 @@ class TariffChartView(QChartView):
             if any(value > 0 for value in rate_values):
                 series.append(bar_set)
 
+        if self._show_generation:
+            generation_values = [
+                -bucket.total_generation_kwh if not show_currency else 0.0
+                for bucket in self._buckets
+            ]
+            if any(value != 0 for value in generation_values):
+                generation_set = QBarSet("Einspeisung")
+                generation_color = QColor("#48c7ff")
+                generation_set.setColor(generation_color)
+                generation_set.setBorderColor(generation_color)
+                generation_set.append(generation_values)
+                generation_set.hovered.connect(self._on_bar_hovered)
+                series.append(generation_set)
+
         if not series.barSets():
             empty_set = QBarSet("Keine Daten")
             empty_set.setColor(QColor("#54408f"))
@@ -128,12 +154,19 @@ class TariffChartView(QChartView):
         axis_y.setLabelsColor(QColor("#f4eeff"))
         axis_y.setGridLineColor(QColor("#54408f"))
         axis_y.setLabelFormat("%.2f" if show_currency else "%.1f")
-        max_value = (
+        max_positive = (
             max(sum(values) for values in zip(*rate_series_values, strict=False))
             if self._buckets and rate_series_values
             else 0.0
         )
-        axis_y.setRange(0.0, max(1.0, max_value * 1.15))
+        max_negative = (
+            max((bucket.total_generation_kwh for bucket in self._buckets), default=0.0)
+            if self._show_generation
+            else 0.0
+        )
+        lower_bound = -max_negative * 1.15 if max_negative > 0 else 0.0
+        upper_bound = max(1.0, max_positive * 1.15)
+        axis_y.setRange(lower_bound, upper_bound)
         axis_y.applyNiceNumbers()
 
         chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
@@ -210,7 +243,12 @@ class TariffChartView(QChartView):
                         f"{self._format_decimal(bucket.rate_cost_eur(rate_name, self._rate_prices_ct.get(rate_name, 0.0)), 2)} EUR"
                     )
         else:
-            lines.append(f"Gesamt: {self._format_decimal(bucket.total_kwh, 3)} kWh")
+            lines.append(f"Verbrauch: {self._format_decimal(bucket.total_kwh, 3)} kWh")
+            if self._show_generation and bucket.total_generation_kwh:
+                lines.append(f"Einspeisung: {self._format_decimal(bucket.total_generation_kwh, 3)} kWh")
+                lines.append(f"Netto: {self._format_decimal(bucket.net_kwh, 3)} kWh")
+            else:
+                lines.append(f"Gesamt: {self._format_decimal(bucket.total_kwh, 3)} kWh")
             for rate_name in self._rate_order:
                 rate_kwh = bucket.rate_kwh(rate_name)
                 if rate_kwh:
