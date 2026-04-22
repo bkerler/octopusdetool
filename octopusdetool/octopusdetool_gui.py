@@ -39,6 +39,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
+    QGroupBox,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -108,12 +110,14 @@ from octopusdetool.octopusdetool import (
 
 
 CONFIG_WRITABLE = True
-CONFIG_FILE = get_app_config_folder() / "config.json"
+CONFIG_FILE = get_app_config_folder() / "config.yaml"
 CONFIG_ENCRYPTION_VERSION = 1
 CONFIG_ENCRYPTED_FIELDS = ("email", "password")
 CONFIG_AES_KEY = hashlib.sha256(b"octopusdetool_rocks!").digest()
 CONFIG_SAVE_FLAG = "save_config_enabled"
 AUTO_OUTPUT_FLAG = "auto_output_enabled"
+ACCOUNTS_CONFIG_KEY = "accounts"
+SELECTED_ACCOUNT_NUMBER_CONFIG_KEY = "selected_account_number"
 TARIFF_TYPE_CONFIG_KEY = "tariff_type"
 LAST_TARIFF_CODE_CONFIG_KEY = "last_tariff_code"
 LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY = "last_tariff_display_name"
@@ -131,9 +135,9 @@ OUTPUT_EXTENSIONS = {
     "yaml": ".yaml",
 }
 def _migrate_config_from_data_folder() -> None:
-    """Ensure config.json lives only in the config folder."""
-    data_config = get_smartmeter_data_folder() / "config.json"
-    app_config = get_app_config_folder() / "config.json"
+    """Ensure config.yaml lives only in the config folder."""
+    data_config = get_smartmeter_data_folder() / "config.yaml"
+    app_config = get_app_config_folder() / "config.yaml"
     if not data_config.exists():
         return
 
@@ -575,6 +579,7 @@ class OctopusSmartMeterGUI:
         self._replace_data_tab_checkboxes()
         self._replace_currency_toggle()
         self._setup_analysis_widgets()
+        self._setup_account_selector()
         self._setup_reference_readings_widgets()
         self._setup_view_calendar_popup()
         self._setup_range_calendar_popup()
@@ -603,12 +608,15 @@ class OctopusSmartMeterGUI:
         self.latest_timestamp: datetime | None = None
         self.reference_readings: list[dict] = []
         self.selected_reference_id: str | None = None
+        self.accounts: list[dict] = []
+        self.selected_account_number: str | None = None
         self._reference_table_updating = False
         self.last_output_format = "excel"
         self._analysis_date_initialized = False
         self._demo_tariff_rates: list[TariffRate] = []
 
         self._set_initial_values()
+        self._refresh_account_cache_paths()
         self._connect_signals()
         _migrate_config_from_data_folder()
         cleanup_app_config_folder()
@@ -658,6 +666,11 @@ class OctopusSmartMeterGUI:
         self.debug_checkbox = self._find_widget(QCheckBox, "debugCheckBox")
         self.debug_output_line_edit = self._find_widget(QLineEdit, "debugOutputLineEdit")
         self.browse_debug_output_button = self._find_widget(QPushButton, "browseDebugOutputButton")
+        self.account_group_box = self._find_widget(QGroupBox, "accountGroupBox")
+        account_layout = self.account_group_box.layout()
+        if not isinstance(account_layout, QGridLayout):
+            raise RuntimeError("Account layout was not found")
+        self.account_layout = account_layout
         self.output_format_combo = self._find_widget(QComboBox, "outputFormatComboBox")
         self.auto_output_checkbox = self._find_widget(QCheckBox, "autoOutputCheckBox")
         self.output_file_line_edit = self._find_widget(QLineEdit, "outputFileLineEdit")
@@ -793,6 +806,17 @@ class OctopusSmartMeterGUI:
             self._show_analysis_table_context_menu
         )
 
+    def _setup_account_selector(self) -> None:
+        self.account_label = QLabel("Konto:")
+        self.account_label.setObjectName("accountLabel")
+        self.account_combo = QComboBox()
+        self.account_combo.setObjectName("accountComboBox")
+        self.account_combo.setEditable(False)
+        self.account_combo.setToolTip("Waehlt das Konto fuer Abruf und Anzeige der Daten aus.")
+        self.account_combo.currentIndexChanged.connect(self._on_account_changed)
+        self.account_layout.addWidget(self.account_label, 4, 0)
+        self.account_layout.addWidget(self.account_combo, 4, 1, 1, 2)
+
     def _setup_reference_readings_widgets(self) -> None:
         self.reference_readings_label = QLabel("Referenz-Stromzaehlerwert:")
         self.reference_readings_label.setObjectName("referenceReadingsLabel")
@@ -852,7 +876,7 @@ class OctopusSmartMeterGUI:
     def _apply_popup_styling(self) -> None:
         combo_stylesheet = _build_combo_stylesheet("#240748")
         popup_stylesheet = _build_popup_list_stylesheet("#240748")
-        for combo in (self.view_mode_combo, self.output_format_combo):
+        for combo in (self.account_combo, self.view_mode_combo, self.output_format_combo):
             combo.setStyleSheet(combo_stylesheet)
             view = combo.view()
             view.setStyleSheet(popup_stylesheet)
@@ -919,6 +943,9 @@ QDateEdit::drop-down {{
 
     def _configure_settings_fields(self) -> None:
         line_edit_stylesheet = _build_line_edit_stylesheet("#240748")
+        self.tariff_type_label.setText("Tarifname:")
+        self.tariff_type_combo.setReadOnly(True)
+        self.tariff_type_combo.setToolTip("Zeigt den live geladenen Tarifnamen aus GraphQL an.")
         for line_edit in (
             self.tariff_type_combo,
             self.tariff_go_line_edit,
@@ -1211,8 +1238,8 @@ QDateEdit::drop-down {{
             settings.monthly_base_price_eur,
         )
         demo_dir = Path(os.environ.get("TMPDIR", "/tmp")) / "octopusdetool-demo"
-        self.csv_path = demo_dir / f"readings_{testmode}.json"
-        self.consumption_csv_path = demo_dir / f"consumption_{testmode}.csv"
+        self.csv_path = demo_dir / f"readings_{testmode}.yaml"
+        self.consumption_csv_path = demo_dir / f"consumption_{testmode}.yaml"
         self.output_file_line_edit.setText(str(self._get_normalized_output_path()))
 
     def _build_demo_readings(self, start: datetime, end: datetime) -> list[dict]:
@@ -1442,7 +1469,7 @@ QDateEdit::drop-down {{
 
     def _read_config_with_migration(self) -> tuple[dict, bool]:
         with open(CONFIG_FILE, "r", encoding="utf-8") as config_file:
-            config = json.load(config_file)
+            config = yaml.safe_load(config_file) or {}
 
         migrated = False
         encrypted_version = config.get("credential_encryption_version", 0)
@@ -1482,7 +1509,7 @@ QDateEdit::drop-down {{
         config_to_save["credential_encryption_version"] = CONFIG_ENCRYPTION_VERSION
 
         with open(CONFIG_FILE, "w", encoding="utf-8") as config_file:
-            json.dump(config_to_save, config_file, indent=2)
+            yaml.safe_dump(config_to_save, config_file, allow_unicode=True, sort_keys=False)
 
     def _serialize_tariff_rates(self) -> list[dict]:
         return [
@@ -1559,6 +1586,81 @@ QDateEdit::drop-down {{
 
         config[TARIFF_TYPE_CONFIG_KEY] = tariff_type
         self._write_config(config)
+
+    def _serialize_accounts(self) -> list[dict]:
+        serialized: list[dict] = []
+        for account in self.accounts:
+            if not isinstance(account, dict):
+                continue
+            number = str(account.get("number", "")).strip()
+            if not number:
+                continue
+            serialized.append(
+                {
+                    "number": number,
+                    "id": str(account.get("id", "")),
+                    "is_active": bool(account.get("is_active") or account.get("active") or account.get("status") == "ACTIVE"),
+                }
+            )
+        return serialized
+
+    def _deserialize_accounts(self, raw_accounts) -> list[dict]:
+        if not isinstance(raw_accounts, list):
+            return []
+        accounts: list[dict] = []
+        for entry in raw_accounts:
+            if not isinstance(entry, dict):
+                continue
+            number = str(entry.get("number", "")).strip()
+            if not number:
+                continue
+            accounts.append(
+                {
+                    "number": number,
+                    "id": str(entry.get("id", "")),
+                    "is_active": bool(entry.get("is_active") or entry.get("active") or entry.get("status") == "ACTIVE"),
+                }
+            )
+        return accounts
+
+    def _refresh_account_combo(self) -> None:
+        current_number = self.selected_account_number
+        self.account_combo.blockSignals(True)
+        self.account_combo.clear()
+        for account in self.accounts:
+            label = account["number"]
+            if account.get("is_active"):
+                label += " (aktiv)"
+            self.account_combo.addItem(label, account["number"])
+        if current_number:
+            index = self.account_combo.findData(current_number)
+            if index >= 0:
+                self.account_combo.setCurrentIndex(index)
+        self.account_combo.setEnabled(len(self.accounts) > 1)
+        self.account_combo.blockSignals(False)
+        self._refresh_account_cache_paths()
+
+    def _choose_default_account_number(self) -> str | None:
+        if self.selected_account_number and any(acc.get("number") == self.selected_account_number for acc in self.accounts):
+            return self.selected_account_number
+        active = next((acc for acc in self.accounts if acc.get("is_active")), None)
+        if active:
+            return str(active.get("number"))
+        if self.accounts:
+            return str(self.accounts[0].get("number"))
+        return None
+
+    def _on_account_changed(self, _index: int) -> None:
+        selected_number = self.account_combo.currentData()
+        self.selected_account_number = str(selected_number) if selected_number else None
+        self._refresh_account_cache_paths()
+        self.check_existing_data()
+        self.save_config(force=True)
+
+    def _refresh_account_cache_paths(self) -> None:
+        account_number = None if self._demo_mode else self.selected_account_number
+        self.csv_path = get_default_output_path(account_number)
+        self.consumption_csv_path = get_default_consumption_csv_path(account_number)
 
     def _toggle_password_visibility(self, checked: bool) -> None:
         self.password_line_edit.setEchoMode(
@@ -1993,7 +2095,7 @@ QDateEdit::drop-down {{
         self.current_tariff_type = tariff_type
         self.tariff_type_combo.blockSignals(True)
         combo_value = self.current_tariff_display_name
-        if combo_value in {TARIFF_INTELLIGENT_12, TARIFF_INTELLIGENT_GO, TARIFF_INTELLIGENT_HEAT}:
+        if combo_value not in {"", "None", None}:
             self.tariff_type_combo.setText(combo_value)
         else:
             self.tariff_type_combo.setText(tariff_type)
@@ -2966,6 +3068,9 @@ QDateEdit::drop-down {{
             self.debug_checkbox.setChecked(bool(config.get("debug", False)))
             self.auto_output_checkbox.setChecked(bool(config.get(AUTO_OUTPUT_FLAG, False)))
             self.use_local_time_checkbox.setChecked(bool(config.get(USE_LOCAL_TIME_CONFIG_KEY, True)))
+            self.accounts = self._deserialize_accounts(config.get(ACCOUNTS_CONFIG_KEY, []))
+            self.selected_account_number = config.get(SELECTED_ACCOUNT_NUMBER_CONFIG_KEY)
+            self._refresh_account_combo()
 
             self.output_format_combo.blockSignals(True)
             self.output_format_combo.setCurrentText(saved_format)
@@ -3054,7 +3159,7 @@ QDateEdit::drop-down {{
             if migrated:
                 self._set_status("Konfiguration geladen und Zugangsdaten verschluesselt migriert")
             else:
-                self._set_status("Konfiguration aus config.json geladen")
+                self._set_status("Konfiguration aus config.yaml geladen")
         except Exception as exc:
             self._has_saved_base_price = False
             self._update_settings_data_summary()
@@ -3066,7 +3171,7 @@ QDateEdit::drop-down {{
             self.latest_timestamp = None
             self.csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-            existing_data, latest_end = load_existing_consumption_data()
+            existing_data, latest_end = load_existing_consumption_data(self.selected_account_number)
             if not existing_data:
                 self._update_settings_data_summary()
                 self._set_status("Keine Verbrauchsdaten gefunden. Bereit zum Abruf aller Daten.")
@@ -3142,6 +3247,8 @@ QDateEdit::drop-down {{
             CONFIG_SAVE_FLAG: self.save_config_checkbox.isChecked(),
             "output_file": str(self._get_normalized_output_path()),
             "excel_file": str(self._get_normalized_output_path()),
+            ACCOUNTS_CONFIG_KEY: self._serialize_accounts(),
+            SELECTED_ACCOUNT_NUMBER_CONFIG_KEY: self.selected_account_number,
             REFERENCE_READINGS_CONFIG_KEY: self._serialize_reference_readings(),
             SELECTED_REFERENCE_ID_CONFIG_KEY: self.selected_reference_id,
             USE_LOCAL_TIME_CONFIG_KEY: self.use_local_time_checkbox.isChecked(),
@@ -3588,15 +3695,22 @@ QDateEdit::drop-down {{
                             "Kein Konto gefunden! Ueberpruefen Sie Ihre Zugangsdaten.",
                         )
 
-                    if len(accounts) > 1:
-                        account_list = "\n".join(
-                            [f"  - {account.get('number', 'unknown')}" for account in accounts]
-                        )
-                        raise Exception(
-                            f"Mehrere Konten gefunden ({len(accounts)}). Bitte waehlen Sie ein Konto aus:\n{account_list}"
-                        )
-
-                    account_number = accounts[0].get("number")
+                    self.accounts = self._deserialize_accounts(accounts)
+                    if not self.accounts:
+                        self.accounts = [
+                            {
+                                "number": str(account.get("number", "")),
+                                "id": str(account.get("id", "")),
+                                "is_active": bool(account.get("is_active") or account.get("active") or account.get("status") == "ACTIVE"),
+                            }
+                            for account in accounts
+                            if account.get("number")
+                        ]
+                    self.selected_account_number = self._choose_default_account_number()
+                    self._refresh_account_combo()
+                    account_number = self.selected_account_number
+                    if account_number is None and accounts:
+                        account_number = str(accounts[0].get("number"))
                     active_agreement = client.get_active_tariff_agreement(account_number)
                     api_tariff_settings = None
                     api_tariff_rates: list[TariffRate] = []
@@ -3744,19 +3858,19 @@ QDateEdit::drop-down {{
 
                     if readings_changed(previous_cached_readings, self.existing_data):
                         self._set_status(
-                            f"Speichere {len(self.existing_data)} Eintraege in readings.json...",
+                            f"Speichere {len(self.existing_data)} Eintraege im YAML-Cache...",
                             update=True,
                         )
                         if not write_readings_json(self.existing_data, self.csv_path):
-                            raise Exception("readings.json konnte nicht gespeichert werden")
+                            raise Exception("YAML-Cache konnte nicht gespeichert werden")
                         if not write_consumption_csv(self.existing_data, self.consumption_csv_path):
-                            raise Exception("consumption.csv konnte nicht gespeichert werden")
+                            raise Exception("Verbrauchs-YAML konnte nicht gespeichert werden")
                     elif csv_needs_api_refresh:
                         if not write_consumption_csv(self.existing_data, self.consumption_csv_path):
-                            raise Exception("consumption.csv konnte nicht gespeichert werden")
+                            raise Exception("Verbrauchs-YAML konnte nicht gespeichert werden")
                     else:
                         self._set_status(
-                            "Keine neuen Eintraege fuer readings.json gefunden.",
+                            "Keine neuen Eintraege fuer den YAML-Cache gefunden.",
                             update=True,
                         )
 
@@ -3765,7 +3879,7 @@ QDateEdit::drop-down {{
                     else:
                         self._show_info(
                             "Daten erfolgreich gespeichert!\n\n"
-                            f"Cache: readings.json ({len(self.existing_data)} Eintraege)\n"
+                            f"Cache: YAML ({len(self.existing_data)} Eintraege)\n"
                             "Automatische Ausgabe ist deaktiviert."
                         )
 

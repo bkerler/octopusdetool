@@ -592,20 +592,34 @@ def ensure_excel_template(tariff_type: str = TARIFF_TWO_ZONES):
     return target
 
 
-def get_default_output_path() -> Path:
+def _sanitize_account_segment(account_number: str | None) -> str:
+    if not account_number:
+        return ""
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(account_number))
+    return cleaned.strip("_")
+
+def get_account_cache_dir(account_number: str | None = None) -> Path:
+    folder = get_app_config_folder()
+    account_segment = _sanitize_account_segment(account_number)
+    if not account_segment:
+        return folder
+    return folder / "accounts" / account_segment
+
+
+def get_default_output_path(account_number: str | None = None) -> Path:
     """Get the default internal readings cache path."""
-    return get_app_config_folder() / "readings.json"
+    return get_account_cache_dir(account_number) / "readings.yaml"
 
 
-def get_default_consumption_csv_path() -> Path:
-    """Get the default API-format CSV cache path."""
-    return get_app_config_folder() / "consumption.csv"
+def get_default_consumption_csv_path(account_number: str | None = None) -> Path:
+    """Get the default API-format consumption cache path."""
+    return get_account_cache_dir(account_number) / "consumption.yaml"
 
 
 def cleanup_app_config_folder() -> None:
-    """Keep only config.json, readings.json, and consumption.csv in the app config folder."""
+    """Keep only config.yaml, readings.yaml, and consumption.yaml in the app config folder."""
     folder = get_app_config_folder()
-    allowed = {"config.json", "readings.json", "consumption.csv"}
+    allowed = {"config.yaml", "accounts"}
     try:
         folder.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -613,6 +627,8 @@ def cleanup_app_config_folder() -> None:
 
     for child in folder.iterdir():
         if child.name in allowed:
+            continue
+        if child.is_dir():
             continue
         if child.is_file():
             try:
@@ -2263,13 +2279,16 @@ def read_existing_csv(csv_path: Path) -> tuple[list, datetime | None]:
 
 
 def read_existing_json(json_path: Path) -> tuple[list, datetime | None]:
-    """Read cached readings.json and return data plus latest interval end."""
+    """Read cached readings.yaml/json and return data plus latest interval end."""
     if not json_path.exists():
         return [], None
 
     try:
         with open(json_path, 'r', encoding='utf-8') as f:
-            payload = json.load(f)
+            if json_path.suffix.lower() in {".yaml", ".yml"}:
+                payload = yaml.safe_load(f)
+            else:
+                payload = json.load(f)
     except Exception as e:
         print(f"Error reading existing JSON: {e}")
         return [], None
@@ -2318,7 +2337,7 @@ def read_existing_json(json_path: Path) -> tuple[list, datetime | None]:
 
 
 def write_readings_json(readings: list[dict], json_path: Path) -> bool:
-    """Persist calibrated readings to the internal JSON cache."""
+    """Persist calibrated readings to the internal YAML cache."""
     try:
         json_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -2334,51 +2353,84 @@ def write_readings_json(readings: list[dict], json_path: Path) -> bool:
             'readings': convert_readings_for_export(readings),
         }
         with open(json_path, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, indent=2, ensure_ascii=False)
+            if json_path.suffix.lower() in {".yaml", ".yml"}:
+                yaml.safe_dump(export_data, f, allow_unicode=True, sort_keys=False)
+            else:
+                json.dump(export_data, f, indent=2, ensure_ascii=False)
         return True
     except Exception as e:
-        print(f"Fehler beim Speichern als readings.json: {e}")
+        print(f"Fehler beim Speichern als readings cache: {e}")
         return False
 
 
 def write_consumption_csv(readings: list[dict], csv_path: Path) -> bool:
-    """Persist readings as API-style CSV with raw timestamps and value precision."""
+    """Persist readings as API-style YAML/CSV cache with raw timestamps and value precision."""
     try:
         csv_path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
 
     try:
-        with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['start', 'end', 'direction', 'energy_kwh', 'consumption_kwh', 'net_kwh'])
-            for reading in readings:
-                writer.writerow([
-                    reading.get('api_start')
-                    or (reading['start'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['start'], datetime) else reading['start']),
-                    reading.get('api_end')
-                    or (reading['end'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['end'], datetime) else reading['end']),
-                    reading.get('direction', 'CONSUMPTION'),
-                    reading.get('energy_kwh', abs(float(reading.get('consumption_kwh', 0.0)))),
-                    reading.get('api_value')
-                    or str(reading['consumption_kwh']),
-                    reading.get('net_kwh', reading.get('consumption_kwh', 0.0)),
-                ])
+        if csv_path.suffix.lower() in {".yaml", ".yml"}:
+            payload = {
+                'metadata': {
+                    'export_date': datetime.now().isoformat(),
+                    'total_readings': len(readings),
+                    'source': 'Octopus Energy Germany Smart Meter',
+                },
+                'readings': [
+                    {
+                        'start': reading.get('api_start')
+                        or (reading['start'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['start'], datetime) else reading['start']),
+                        'end': reading.get('api_end')
+                        or (reading['end'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['end'], datetime) else reading['end']),
+                        'direction': reading.get('direction', 'CONSUMPTION'),
+                        'energy_kwh': reading.get('energy_kwh', abs(float(reading.get('consumption_kwh', 0.0)))),
+                        'consumption_kwh': reading.get('api_value') or str(reading['consumption_kwh']),
+                        'net_kwh': reading.get('net_kwh', reading.get('consumption_kwh', 0.0)),
+                    }
+                    for reading in readings
+                ],
+            }
+            with open(csv_path, 'w', encoding='utf-8') as f:
+                yaml.safe_dump(payload, f, allow_unicode=True, sort_keys=False)
+        else:
+            with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(['start', 'end', 'direction', 'energy_kwh', 'consumption_kwh', 'net_kwh'])
+                for reading in readings:
+                    writer.writerow([
+                        reading.get('api_start')
+                        or (reading['start'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['start'], datetime) else reading['start']),
+                        reading.get('api_end')
+                        or (reading['end'].replace(tzinfo=timezone.utc).isoformat() if isinstance(reading['end'], datetime) else reading['end']),
+                        reading.get('direction', 'CONSUMPTION'),
+                        reading.get('energy_kwh', abs(float(reading.get('consumption_kwh', 0.0)))),
+                        reading.get('api_value')
+                        or str(reading['consumption_kwh']),
+                        reading.get('net_kwh', reading.get('consumption_kwh', 0.0)),
+                    ])
         return True
     except Exception as e:
-        print(f"Fehler beim Speichern als consumption.csv: {e}")
+        print(f"Fehler beim Speichern als consumption cache: {e}")
         return False
 
 
 def consumption_csv_has_api_format(csv_path: Path) -> bool:
-    """Return True when consumption.csv stores timestamps in API-style ISO format."""
+    """Return True when the consumption cache stores timestamps in API-style ISO format."""
     if not csv_path.exists():
         return False
 
     try:
-        with open(csv_path, 'r', newline='', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            first_row = next(reader, None)
+        if csv_path.suffix.lower() in {".yaml", ".yml"}:
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                payload = yaml.safe_load(f) or {}
+            rows = payload.get("readings", []) if isinstance(payload, dict) else []
+            first_row = rows[0] if rows else None
+        else:
+            with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                first_row = next(reader, None)
     except Exception:
         return False
 
@@ -2390,9 +2442,9 @@ def consumption_csv_has_api_format(csv_path: Path) -> bool:
     return 'T' in start_value and ('+' in start_value or start_value.endswith('Z')) and 'T' in end_value
 
 
-def migrate_consumption_csv_to_config() -> Path:
-    """Move any legacy Documents consumption.csv into the config folder."""
-    config_csv = get_default_output_path()
+def migrate_consumption_csv_to_config(account_number: str | None = None) -> Path:
+    """Move any legacy Documents consumption cache into the config folder."""
+    config_csv = get_default_output_path(account_number)
     legacy_csv = get_smartmeter_data_folder() / "consumption.csv"
 
     try:
@@ -2422,14 +2474,14 @@ def migrate_consumption_csv_to_config() -> Path:
     return config_csv
 
 
-def load_existing_consumption_data() -> tuple[list, datetime | None]:
+def load_existing_consumption_data(account_number: str | None = None) -> tuple[list, datetime | None]:
     """
     Load existing consumption data.
 
     Returns:
         Tuple of (readings, latest_interval_end)
     """
-    config_csv = migrate_consumption_csv_to_config()
+    config_csv = migrate_consumption_csv_to_config(account_number)
     return read_existing_json(config_csv)
 
 

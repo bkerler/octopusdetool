@@ -119,6 +119,7 @@ QLabel {
 
 QLabel#emailLabel,
 QLabel#passwordLabel,
+QLabel#accountLabel,
 QLabel#fromDateLabel,
 QLabel#toDateLabel {
     background-color: #2e1160;
