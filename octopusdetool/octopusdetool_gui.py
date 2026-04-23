@@ -17,6 +17,7 @@ import io
 import json
 import os
 import platform
+import random
 import sys
 import traceback
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -38,6 +39,8 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
+    QGridLayout,
+    QGroupBox,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -69,10 +72,15 @@ from octopusdetool.octopusdetool import (
     DISPLAY_NAME_OCTOPUS_GO,
     DISPLAY_NAME_OCTOPUS_HEAT,
     OctopusGermanyClient,
+    TARIFF_DYNAMIC,
+    TARIFF_INTELLIGENT_12,
     TARIFF_INTELLIGENT_GO,
     TARIFF_INTELLIGENT_HEAT,
+    TARIFF_TWO_ZONES,
+    TARIFF_THREE_ZONES,
     TariffAgreement,
     TariffRate,
+    TariffSettings,
     cleanup_app_config_folder,
     detect_excel_template_type,
     ensure_excel_template,
@@ -81,6 +89,7 @@ from octopusdetool.octopusdetool import (
     get_default_excel_path,
     get_default_consumption_csv_path,
     get_default_tariff_settings_for_type,
+    get_demo_tariff_profile,
     get_default_output_path,
     get_app_config_folder,
     get_smartmeter_data_folder,
@@ -101,12 +110,14 @@ from octopusdetool.octopusdetool import (
 
 
 CONFIG_WRITABLE = True
-CONFIG_FILE = get_app_config_folder() / "config.json"
+CONFIG_FILE = get_app_config_folder() / "config.yaml"
 CONFIG_ENCRYPTION_VERSION = 1
 CONFIG_ENCRYPTED_FIELDS = ("email", "password")
 CONFIG_AES_KEY = hashlib.sha256(b"octopusdetool_rocks!").digest()
 CONFIG_SAVE_FLAG = "save_config_enabled"
 AUTO_OUTPUT_FLAG = "auto_output_enabled"
+ACCOUNTS_CONFIG_KEY = "accounts"
+SELECTED_ACCOUNT_NUMBER_CONFIG_KEY = "selected_account_number"
 TARIFF_TYPE_CONFIG_KEY = "tariff_type"
 LAST_TARIFF_CODE_CONFIG_KEY = "last_tariff_code"
 LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY = "last_tariff_display_name"
@@ -124,9 +135,9 @@ OUTPUT_EXTENSIONS = {
     "yaml": ".yaml",
 }
 def _migrate_config_from_data_folder() -> None:
-    """Ensure config.json lives only in the config folder."""
-    data_config = get_smartmeter_data_folder() / "config.json"
-    app_config = get_app_config_folder() / "config.json"
+    """Ensure config.yaml lives only in the config folder."""
+    data_config = get_smartmeter_data_folder() / "config.yaml"
+    app_config = get_app_config_folder() / "config.yaml"
     if not data_config.exists():
         return
 
@@ -556,9 +567,11 @@ class OctopusSmartMeterGUI:
     WINDOW_SCREEN_FRACTION = 0.92
     RESIZE_STEP = 20
 
-    def __init__(self, app: QApplication, debug_enabled: bool = False):
+    def __init__(self, app: QApplication, debug_enabled: bool = False, testmode: str | None = None):
         self.app = app
         self._debug_enabled_from_cli = debug_enabled
+        self._demo_mode = testmode is not None
+        self._demo_mode_name = testmode
         self.window = self._load_ui()
         self._bind_widgets()
         self._clear_line_edit_actions: list = []
@@ -566,6 +579,7 @@ class OctopusSmartMeterGUI:
         self._replace_data_tab_checkboxes()
         self._replace_currency_toggle()
         self._setup_analysis_widgets()
+        self._setup_account_selector()
         self._setup_reference_readings_widgets()
         self._setup_view_calendar_popup()
         self._setup_range_calendar_popup()
@@ -576,7 +590,7 @@ class OctopusSmartMeterGUI:
         self._configure_tooltip_palette()
         self._configure_view_calendar_button()
         self._set_window_icon()
-        self.current_tariff_type = TARIFF_INTELLIGENT_GO
+        self.current_tariff_type = TARIFF_TWO_ZONES
         self.current_tariff_display_name = ""
         self.current_tariff_valid_from = ""
         self.current_tariff_valid_to = ""
@@ -594,14 +608,27 @@ class OctopusSmartMeterGUI:
         self.latest_timestamp: datetime | None = None
         self.reference_readings: list[dict] = []
         self.selected_reference_id: str | None = None
+        self.accounts: list[dict] = []
+        self.selected_account_number: str | None = None
         self._reference_table_updating = False
         self.last_output_format = "excel"
         self._analysis_date_initialized = False
+        self._demo_tariff_rates: list[TariffRate] = []
 
         self._set_initial_values()
+        self._refresh_account_cache_paths()
         self._connect_signals()
         _migrate_config_from_data_folder()
         cleanup_app_config_folder()
+        if self._demo_mode:
+            self._load_demo_tariff(testmode or "2")
+            self.email_line_edit.setText("test")
+            self.password_line_edit.setText("test")
+            self.from_date_edit.setDate(QDate.currentDate().addMonths(-3))
+            self.to_date_edit.setDate(QDate.currentDate())
+            self._refresh_analysis_view()
+            self._set_status(f"Demo-Modus aktiv: {self.current_tariff_display_name}")
+            return
         self.load_config()
         if self._debug_enabled_from_cli:
             self.debug_checkbox.setChecked(True)
@@ -639,6 +666,11 @@ class OctopusSmartMeterGUI:
         self.debug_checkbox = self._find_widget(QCheckBox, "debugCheckBox")
         self.debug_output_line_edit = self._find_widget(QLineEdit, "debugOutputLineEdit")
         self.browse_debug_output_button = self._find_widget(QPushButton, "browseDebugOutputButton")
+        self.account_group_box = self._find_widget(QGroupBox, "accountGroupBox")
+        account_layout = self.account_group_box.layout()
+        if not isinstance(account_layout, QGridLayout):
+            raise RuntimeError("Account layout was not found")
+        self.account_layout = account_layout
         self.output_format_combo = self._find_widget(QComboBox, "outputFormatComboBox")
         self.auto_output_checkbox = self._find_widget(QCheckBox, "autoOutputCheckBox")
         self.output_file_line_edit = self._find_widget(QLineEdit, "outputFileLineEdit")
@@ -653,7 +685,7 @@ class OctopusSmartMeterGUI:
         self.progress_bar.setSizePolicy(progress_policy)
         self.fetch_data_button = self._find_widget(QPushButton, "fetchDataButton")
 
-        self.tariff_type_combo = self._find_widget(QComboBox, "tariffTypeComboBox")
+        self.tariff_type_combo = self._find_widget(QLineEdit, "tariffTypeComboBox")
         self.tariff_type_label = self._find_widget(QLabel, "tariffTypeLabel")
         self.tariff_go_label = self._find_widget(QLabel, "tariffGoLabel")
         self.tariff_go_line_edit = self._find_widget(QLineEdit, "tariffGoLineEdit")
@@ -774,6 +806,17 @@ class OctopusSmartMeterGUI:
             self._show_analysis_table_context_menu
         )
 
+    def _setup_account_selector(self) -> None:
+        self.account_label = QLabel("Konto:")
+        self.account_label.setObjectName("accountLabel")
+        self.account_combo = QComboBox()
+        self.account_combo.setObjectName("accountComboBox")
+        self.account_combo.setEditable(False)
+        self.account_combo.setToolTip("Waehlt das Konto fuer Abruf und Anzeige der Daten aus.")
+        self.account_combo.currentIndexChanged.connect(self._on_account_changed)
+        self.account_layout.addWidget(self.account_label, 4, 0)
+        self.account_layout.addWidget(self.account_combo, 4, 1, 1, 2)
+
     def _setup_reference_readings_widgets(self) -> None:
         self.reference_readings_label = QLabel("Referenz-Stromzaehlerwert:")
         self.reference_readings_label.setObjectName("referenceReadingsLabel")
@@ -833,7 +876,7 @@ class OctopusSmartMeterGUI:
     def _apply_popup_styling(self) -> None:
         combo_stylesheet = _build_combo_stylesheet("#240748")
         popup_stylesheet = _build_popup_list_stylesheet("#240748")
-        for combo in (self.view_mode_combo, self.output_format_combo, self.tariff_type_combo):
+        for combo in (self.account_combo, self.view_mode_combo, self.output_format_combo):
             combo.setStyleSheet(combo_stylesheet)
             view = combo.view()
             view.setStyleSheet(popup_stylesheet)
@@ -842,8 +885,6 @@ class OctopusSmartMeterGUI:
             popup_window = view.window()
             popup_window.setStyleSheet("background-color: #240748; border: 1px solid #6f4df6;")
             popup_window.setContentsMargins(0, 0, 0, 0)
-
-        self.output_format_combo.setStyleSheet(_build_combo_stylesheet("#1c0638"))
 
     def _configure_range_date_edits(self) -> None:
         date_edit_stylesheet = f"""
@@ -902,7 +943,11 @@ QDateEdit::drop-down {{
 
     def _configure_settings_fields(self) -> None:
         line_edit_stylesheet = _build_line_edit_stylesheet("#240748")
+        self.tariff_type_label.setText("Tarifname:")
+        self.tariff_type_combo.setReadOnly(True)
+        self.tariff_type_combo.setToolTip("Zeigt den live geladenen Tarifnamen aus GraphQL an.")
         for line_edit in (
+            self.tariff_type_combo,
             self.tariff_go_line_edit,
             self.tariff_standard_line_edit,
             self.tariff_high_line_edit,
@@ -911,8 +956,6 @@ QDateEdit::drop-down {{
             self.config_path_line_edit,
         ):
             line_edit.setStyleSheet(line_edit_stylesheet)
-
-        self.tariff_type_combo.setStyleSheet(_build_combo_stylesheet("#240748"))
         self.missing_entries_table_model = QStandardItemModel(self.missing_entries_table_view)
         self.missing_entries_table_model.setHorizontalHeaderLabels(["Datum", "Uhrzeit"])
         self.missing_entries_table_view.setModel(self.missing_entries_table_model)
@@ -1132,10 +1175,9 @@ QDateEdit::drop-down {{
         self.output_file_line_edit.setText(str(self._get_default_output_path("excel")))
         self.progress_bar.hide()
         self._toggle_password_visibility(False)
-        self.tariff_type_combo.clear()
-        self.tariff_type_combo.addItems([TARIFF_INTELLIGENT_GO, TARIFF_INTELLIGENT_HEAT])
+        self.tariff_type_combo.setText(TARIFF_INTELLIGENT_12)
         self._set_tariff_inputs(
-            TARIFF_INTELLIGENT_GO,
+            TARIFF_TWO_ZONES,
             self.default_tariff_settings.get("tariff_go_ct", DEFAULT_TARIFF_GO_CT),
             self.default_tariff_settings.get("tariff_standard_ct", DEFAULT_TARIFF_STANDARD_CT),
             0.0,
@@ -1149,6 +1191,7 @@ QDateEdit::drop-down {{
         self.view_currency_checkbox.setChecked(False)
         self.config_path_line_edit.setText(str(get_app_config_folder()))
         self._configure_view_date_edit()
+        self._refresh_reference_readings_table()
         self._refresh_analysis_view()
 
     def _connect_signals(self) -> None:
@@ -1160,7 +1203,7 @@ QDateEdit::drop-down {{
         self.debug_output_line_edit.editingFinished.connect(self._normalize_debug_output_entry)
         self.browse_debug_output_button.clicked.connect(self.browse_debug_output_file)
         self.fetch_data_button.clicked.connect(self.get_data)
-        self.tariff_type_combo.currentTextChanged.connect(self._on_tariff_type_changed)
+        self.tariff_type_combo.editingFinished.connect(self._on_tariff_type_changed)
         self.tariff_go_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
         self.tariff_standard_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
         self.tariff_high_line_edit.editingFinished.connect(self._on_tariff_fields_edited)
@@ -1175,6 +1218,123 @@ QDateEdit::drop-down {{
         self.view_currency_checkbox.toggled.connect(lambda _checked: self._refresh_analysis_view())
         self.view_previous_button.clicked.connect(lambda: self._shift_view_date(-1))
         self.view_next_button.clicked.connect(lambda: self._shift_view_date(1))
+
+    def _load_demo_tariff(self, testmode: str) -> None:
+        display_name, settings, rates = get_demo_tariff_profile(testmode)
+        self.current_tariff_display_name = display_name
+        self.current_tariff_type = settings.tariff_type
+        self.current_tariff_rates = rates
+        self._demo_tariff_rates = rates
+        self._excel_export_supported = settings.tariff_type in {TARIFF_TWO_ZONES, TARIFF_THREE_ZONES}
+        self._excel_export_reason = "" if self._excel_export_supported else "Excel-Export ist fuer diesen Demo-Tarif nicht verfuegbar."
+        self.tariff_type_combo.blockSignals(True)
+        self.tariff_type_combo.setText(display_name)
+        self.tariff_type_combo.blockSignals(False)
+        self._set_tariff_inputs(
+            settings.tariff_type,
+            settings.low_ct,
+            settings.standard_ct,
+            settings.high_ct,
+            settings.monthly_base_price_eur,
+        )
+        demo_dir = Path(os.environ.get("TMPDIR", "/tmp")) / "octopusdetool-demo"
+        self.csv_path = demo_dir / f"readings_{testmode}.yaml"
+        self.consumption_csv_path = demo_dir / f"consumption_{testmode}.yaml"
+        self.output_file_line_edit.setText(str(self._get_normalized_output_path()))
+
+    def _build_demo_readings(self, start: datetime, end: datetime) -> list[dict]:
+        readings: list[dict] = []
+        cursor = start.replace(minute=0, second=0, microsecond=0)
+        while cursor < end:
+            hour = cursor.hour
+            rng = random.Random(
+                f"{cursor.date().isoformat()}:{hour}:{self.current_tariff_type}:{self._demo_mode_name}"
+            )
+            weekday = cursor.weekday()
+            seasonal = 0.92 + (0.10 * ((cursor.timetuple().tm_yday % 30) / 29.0))
+            weekend_factor = 0.88 if weekday >= 5 else 1.0
+            night_factor = 1.0 + (0.18 if hour in {0, 1, 2, 3, 4} else 0.0)
+            daytime_factor = 1.0 + (0.12 if 7 <= hour <= 18 else 0.0)
+            car_charging = hour in {0, 1, 2, 3}
+            low_usage = hour in {23}
+            solar_generation = 0.0
+
+            if self._demo_mode_name == "dynamically":
+                if hour in {0, 1, 2, 3}:
+                    rate_name = "Demo Offpeak"
+                    base_kwh = 0.95
+                elif hour in {4, 5, 6, 7}:
+                    rate_name = "Demo Shoulder"
+                    base_kwh = 1.15
+                elif hour in {8, 9, 10, 11, 12, 13, 14, 15, 16, 17}:
+                    rate_name = "Demo Peak"
+                    base_kwh = 1.55
+                else:
+                    rate_name = "Demo Superpeak"
+                    base_kwh = 1.35
+            elif self.current_tariff_type == TARIFF_THREE_ZONES:
+                if hour in {2, 3, 4, 5, 12, 13, 14, 15}:
+                    rate_name = "Demo Low"
+                    base_kwh = 0.85
+                elif hour in {18, 19, 20}:
+                    rate_name = "Demo High"
+                    base_kwh = 1.75
+                else:
+                    rate_name = "Demo Standard"
+                    base_kwh = 1.15
+            else:
+                if hour in {0, 1, 2, 3, 4}:
+                    rate_name = "Demo Low"
+                    base_kwh = 0.75
+                else:
+                    rate_name = "Demo Standard"
+                    base_kwh = 1.10
+
+            if car_charging:
+                net_kwh = base_kwh * (2.0 + rng.uniform(-0.25, 0.25))
+            elif low_usage:
+                net_kwh = base_kwh * (0.45 + rng.uniform(-0.08, 0.08))
+            else:
+                net_kwh = base_kwh * (0.95 + rng.uniform(-0.12, 0.12))
+
+            if 9 <= hour <= 16:
+                solar_generation = max(
+                    0.0,
+                    (1.6 if 12 <= hour <= 13 else 1.0 if 10 <= hour <= 15 else 0.55)
+                    * seasonal
+                    * (0.92 + rng.uniform(-0.10, 0.10)),
+                )
+            if solar_generation > 0.0 and hour in {9, 10, 11, 12, 13, 14, 15, 16}:
+                net_kwh = net_kwh - solar_generation
+
+            net_kwh *= weekend_factor
+            net_kwh *= night_factor if car_charging else daytime_factor
+            net_kwh += rng.uniform(-0.05, 0.05)
+            net_kwh = round(net_kwh, 3)
+
+            if net_kwh < 0:
+                direction = "GENERATION"
+                source = f"{rate_name} Feed-in"
+            else:
+                direction = "CONSUMPTION"
+                source = rate_name
+
+            readings.append(
+                {
+                    "start": cursor,
+                    "end": cursor + timedelta(hours=1),
+                    "energy_kwh": abs(net_kwh),
+                    "consumption_kwh": abs(net_kwh),
+                    "net_kwh": net_kwh,
+                    "direction": direction,
+                    "api_start": cursor.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "api_end": (cursor + timedelta(hours=1)).replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "api_value": str(abs(net_kwh)),
+                    "source": source,
+                }
+            )
+            cursor += timedelta(hours=1)
+        return readings
 
     def _set_window_icon(self) -> None:
         icon = QIcon()
@@ -1309,7 +1469,7 @@ QDateEdit::drop-down {{
 
     def _read_config_with_migration(self) -> tuple[dict, bool]:
         with open(CONFIG_FILE, "r", encoding="utf-8") as config_file:
-            config = json.load(config_file)
+            config = yaml.safe_load(config_file) or {}
 
         migrated = False
         encrypted_version = config.get("credential_encryption_version", 0)
@@ -1349,7 +1509,7 @@ QDateEdit::drop-down {{
         config_to_save["credential_encryption_version"] = CONFIG_ENCRYPTION_VERSION
 
         with open(CONFIG_FILE, "w", encoding="utf-8") as config_file:
-            json.dump(config_to_save, config_file, indent=2)
+            yaml.safe_dump(config_to_save, config_file, allow_unicode=True, sort_keys=False)
 
     def _serialize_tariff_rates(self) -> list[dict]:
         return [
@@ -1426,6 +1586,81 @@ QDateEdit::drop-down {{
 
         config[TARIFF_TYPE_CONFIG_KEY] = tariff_type
         self._write_config(config)
+
+    def _serialize_accounts(self) -> list[dict]:
+        serialized: list[dict] = []
+        for account in self.accounts:
+            if not isinstance(account, dict):
+                continue
+            number = str(account.get("number", "")).strip()
+            if not number:
+                continue
+            serialized.append(
+                {
+                    "number": number,
+                    "id": str(account.get("id", "")),
+                    "is_active": bool(account.get("is_active") or account.get("active") or account.get("status") == "ACTIVE"),
+                }
+            )
+        return serialized
+
+    def _deserialize_accounts(self, raw_accounts) -> list[dict]:
+        if not isinstance(raw_accounts, list):
+            return []
+        accounts: list[dict] = []
+        for entry in raw_accounts:
+            if not isinstance(entry, dict):
+                continue
+            number = str(entry.get("number", "")).strip()
+            if not number:
+                continue
+            accounts.append(
+                {
+                    "number": number,
+                    "id": str(entry.get("id", "")),
+                    "is_active": bool(entry.get("is_active") or entry.get("active") or entry.get("status") == "ACTIVE"),
+                }
+            )
+        return accounts
+
+    def _refresh_account_combo(self) -> None:
+        current_number = self.selected_account_number
+        self.account_combo.blockSignals(True)
+        self.account_combo.clear()
+        for account in self.accounts:
+            label = account["number"]
+            if account.get("is_active"):
+                label += " (aktiv)"
+            self.account_combo.addItem(label, account["number"])
+        if current_number:
+            index = self.account_combo.findData(current_number)
+            if index >= 0:
+                self.account_combo.setCurrentIndex(index)
+        self.account_combo.setEnabled(len(self.accounts) > 1)
+        self.account_combo.blockSignals(False)
+        self._refresh_account_cache_paths()
+
+    def _choose_default_account_number(self) -> str | None:
+        if self.selected_account_number and any(acc.get("number") == self.selected_account_number for acc in self.accounts):
+            return self.selected_account_number
+        active = next((acc for acc in self.accounts if acc.get("is_active")), None)
+        if active:
+            return str(active.get("number"))
+        if self.accounts:
+            return str(self.accounts[0].get("number"))
+        return None
+
+    def _on_account_changed(self, _index: int) -> None:
+        selected_number = self.account_combo.currentData()
+        self.selected_account_number = str(selected_number) if selected_number else None
+        self._refresh_account_cache_paths()
+        self.check_existing_data()
+        self.save_config(force=True)
+
+    def _refresh_account_cache_paths(self) -> None:
+        account_number = None if self._demo_mode else self.selected_account_number
+        self.csv_path = get_default_output_path(account_number)
+        self.consumption_csv_path = get_default_consumption_csv_path(account_number)
 
     def _toggle_password_visibility(self, checked: bool) -> None:
         self.password_line_edit.setEchoMode(
@@ -1792,6 +2027,9 @@ QDateEdit::drop-down {{
         return OUTPUT_EXTENSIONS.get(format_type, ".csv")
 
     def _get_default_output_path(self, format_type: str) -> Path:
+        if self._demo_mode:
+            demo_dir = Path(os.environ.get("TMPDIR", "/tmp")) / "octopusdetool-demo"
+            return self._ensure_output_suffix(demo_dir / f"demo_output{self._get_extension_for_format(format_type)}", format_type)
         if format_type == "excel":
             return get_default_excel_path(self.current_tariff_type)
         return get_smartmeter_data_folder() / f"smartmeter_daten{self._get_extension_for_format(format_type)}"
@@ -1814,6 +2052,12 @@ QDateEdit::drop-down {{
 
     def _get_normalized_output_path(self, format_type: str | None = None) -> Path:
         format_type = format_type or self.output_format_combo.currentText()
+        if self._demo_mode:
+            demo_dir = Path(os.environ.get("TMPDIR", "/tmp")) / "octopusdetool-demo"
+            return self._ensure_output_suffix(
+                demo_dir / f"demo_output{self._get_extension_for_format(format_type)}",
+                format_type,
+            )
         raw_value = self.output_file_line_edit.text().strip()
         if not raw_value:
             return self._get_default_output_path(format_type)
@@ -1850,7 +2094,11 @@ QDateEdit::drop-down {{
         previous_tariff_type = self.current_tariff_type
         self.current_tariff_type = tariff_type
         self.tariff_type_combo.blockSignals(True)
-        self.tariff_type_combo.setCurrentText(tariff_type)
+        combo_value = self.current_tariff_display_name
+        if combo_value not in {"", "None", None}:
+            self.tariff_type_combo.setText(combo_value)
+        else:
+            self.tariff_type_combo.setText(tariff_type)
         self.tariff_type_combo.blockSignals(False)
         self.tariff_go_line_edit.setText(self._format_decimal_input(tariff_go_ct))
         self.tariff_standard_line_edit.setText(self._format_decimal_input(tariff_standard_ct))
@@ -1866,8 +2114,8 @@ QDateEdit::drop-down {{
         current_output_path = self._get_normalized_output_path("excel")
         if current_output_path in {
             get_default_excel_path(previous_tariff_type),
-            get_default_excel_path(TARIFF_INTELLIGENT_GO),
-            get_default_excel_path(TARIFF_INTELLIGENT_HEAT),
+            get_default_excel_path(TARIFF_TWO_ZONES),
+            get_default_excel_path(TARIFF_THREE_ZONES),
         }:
             self.output_file_line_edit.setText(str(self._get_default_output_path("excel")))
 
@@ -1875,24 +2123,26 @@ QDateEdit::drop-down {{
         if self._apply_live_tariff_rate_ui():
             return
 
-        is_heat = self.current_tariff_type == TARIFF_INTELLIGENT_HEAT
+        is_heat = self.current_tariff_type == TARIFF_THREE_ZONES
+        labels = self._get_fixed_rate_labels(self.current_tariff_type)
+        self.tariff_go_label.setText(f"{labels[0]} (ct/kWh)")
+        self.tariff_standard_label.setText(f"{labels[1]} (ct/kWh)")
         if is_heat:
-            self.tariff_go_label.setText("Tarif Niedrig 02:00-05:59, 12:00-15:59 (ct/kWh)")
-            self.tariff_standard_label.setText(
-                "Tarif Standard 06:00-11:59, 16:00-17:59, 21:00-01:59 (ct/kWh)"
-            )
-            self.tariff_high_label.setText("Tarif Hoch 18:00-20:59 (ct/kWh)")
+            self.tariff_high_label.setText(f"{labels[2]} (ct/kWh)")
         else:
-            self.tariff_go_label.setText("Tarif Go 00:00-04:59 (ct/kWh)")
-            self.tariff_standard_label.setText("Tarif Standard 05:00-23:59 (ct/kWh)")
-            self.tariff_high_label.setText("Tarif Hoch (ct/kWh)")
+            self.tariff_high_label.setText("Tarif 3 (ct/kWh)")
 
         self.tariff_high_label.setVisible(is_heat)
         self.tariff_high_line_edit.setVisible(is_heat)
 
-    def _on_tariff_type_changed(self, tariff_type: str) -> None:
+    def _on_tariff_type_changed(self) -> None:
         self.current_tariff_rates = []
         self._set_excel_export_support(True)
+        tariff_display_name, tariff_type = self._tariff_name_and_model(self.tariff_type_combo.text())
+        self.current_tariff_display_name = tariff_display_name
+        self.tariff_type_combo.blockSignals(True)
+        self.tariff_type_combo.setText(tariff_display_name)
+        self.tariff_type_combo.blockSignals(False)
         defaults = get_default_tariff_settings_for_type(tariff_type)
         try:
             base_price_eur = self._parse_decimal_input(self.base_price_line_edit.text())
@@ -1936,8 +2186,8 @@ QDateEdit::drop-down {{
         return fallback
 
     def _get_tariff_values(self, *, show_error: bool) -> tuple[str, float, float, float, float] | None:
-        tariff_type = self.tariff_type_combo.currentText() or TARIFF_INTELLIGENT_GO
-        is_heat = tariff_type == TARIFF_INTELLIGENT_HEAT
+        _tariff_display_name, tariff_type = self._tariff_name_and_model(self.tariff_type_combo.text())
+        is_heat = tariff_type == TARIFF_THREE_ZONES
 
         field_specs = [
             (
@@ -2017,11 +2267,29 @@ QDateEdit::drop-down {{
             return None
         if DISPLAY_NAME_DYNAMIC_OCTOPUS in normalized_display_name:
             return None
+        if TARIFF_INTELLIGENT_12.lower() in normalized_display_name:
+            return TARIFF_TWO_ZONES
         if DISPLAY_NAME_OCTOPUS_GO in normalized_display_name:
-            return TARIFF_INTELLIGENT_GO
+            return TARIFF_TWO_ZONES
         if DISPLAY_NAME_OCTOPUS_HEAT in normalized_display_name:
-            return TARIFF_INTELLIGENT_HEAT
+            return TARIFF_THREE_ZONES
         return None
+
+    def _normalize_tariff_display_name(self, raw_value: str) -> str:
+        text = raw_value.strip()
+        normalized = text.lower()
+        if TARIFF_INTELLIGENT_12.lower() in normalized:
+            return TARIFF_INTELLIGENT_12
+        if DISPLAY_NAME_OCTOPUS_GO in normalized:
+            return TARIFF_INTELLIGENT_GO
+        if DISPLAY_NAME_OCTOPUS_HEAT in normalized:
+            return TARIFF_INTELLIGENT_HEAT
+        return text
+
+    def _tariff_name_and_model(self, raw_value: str) -> tuple[str, str]:
+        display_name = self._normalize_tariff_display_name(raw_value)
+        model = self._resolve_tariff_type_from_display_name(display_name) or TARIFF_TWO_ZONES
+        return display_name, model
 
     def _set_excel_export_support(self, supported: bool, reason: str = "") -> None:
         self._excel_export_supported = supported
@@ -2071,24 +2339,26 @@ QDateEdit::drop-down {{
         return True
 
     def _get_fixed_rate_labels(self, tariff_type: str) -> list[str]:
-        labels = ["Tarif Niedrig" if tariff_type == TARIFF_INTELLIGENT_HEAT else "Tarif Go", "Tarif Standard"]
-        if tariff_type == TARIFF_INTELLIGENT_HEAT:
-            labels.append("Tarif Hoch")
-        return labels
+        if tariff_type == TARIFF_THREE_ZONES:
+            return ["Tarif 1", "Tarif 2", "Tarif 3"]
+        return ["Tarif 1", "Tarif 2"]
 
-    def _get_analysis_rate_order(self, tariff_type: str) -> list[str]:
+    def _get_tariff_rate_labels(self, tariff_type: str) -> list[str]:
         if self.current_tariff_rates:
             return [rate.name for rate in self.current_tariff_rates]
         return self._get_fixed_rate_labels(tariff_type)
+
+    def _get_analysis_rate_order(self, tariff_type: str) -> list[str]:
+        return self._get_tariff_rate_labels(tariff_type)
 
     def _get_analysis_rate_prices(self, tariff_type: str) -> dict[str, float]:
         tariff_values = self._get_tariff_values(show_error=False)
         if tariff_values is None:
             tariff_values = (
                 tariff_type,
-                DEFAULT_TARIFF_HEAT_LOW_CT if tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_GO_CT,
-                DEFAULT_TARIFF_HEAT_STANDARD_CT if tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_STANDARD_CT,
-                DEFAULT_TARIFF_HEAT_HIGH_CT if tariff_type == TARIFF_INTELLIGENT_HEAT else 0.0,
+                DEFAULT_TARIFF_HEAT_LOW_CT if tariff_type == TARIFF_THREE_ZONES else DEFAULT_TARIFF_GO_CT,
+                DEFAULT_TARIFF_HEAT_STANDARD_CT if tariff_type == TARIFF_THREE_ZONES else DEFAULT_TARIFF_STANDARD_CT,
+                DEFAULT_TARIFF_HEAT_HIGH_CT if tariff_type == TARIFF_THREE_ZONES else 0.0,
                 DEFAULT_MONTHLY_BASE_PRICE_EUR,
             )
 
@@ -2101,7 +2371,7 @@ QDateEdit::drop-down {{
             labels[0]: tariff_go_ct,
             labels[1]: tariff_standard_ct,
         }
-        if tariff_type == TARIFF_INTELLIGENT_HEAT and len(labels) > 2:
+        if tariff_type == TARIFF_THREE_ZONES and len(labels) > 2:
             prices[labels[2]] = tariff_high_ct
         return prices
 
@@ -2120,18 +2390,14 @@ QDateEdit::drop-down {{
         return reading_time >= start_time or reading_time < end_time
 
     def _classify_local_tariff_zone(self, reading_start: datetime, tariff_type: str) -> str:
-        # Fixed tariff fallback uses the same local-time tariff windows as the
-        # provider/API windows above.
+        if self.current_tariff_rates:
+            for index, rate in enumerate(self.current_tariff_rates):
+                if any(self._reading_matches_window(reading_start, window) for window in rate.windows):
+                    return str(index)
+
+        # Legacy fallback only when no live tariff data has ever been loaded.
         reading_hour = to_local_datetime(reading_start).hour
-
-        if tariff_type == TARIFF_INTELLIGENT_HEAT:
-            if reading_hour in {2, 3, 4, 5, 12, 13, 14, 15}:
-                return "low"
-            if reading_hour in {18, 19, 20}:
-                return "high"
-            return "standard"
-
-        return "low" if 0 <= reading_hour <= 4 else "standard"
+        return "0" if reading_hour < 12 else "1"
 
     def _get_rate_name_for_reading(self, reading_start: datetime, tariff_type: str) -> str:
         if self.current_tariff_rates:
@@ -2141,11 +2407,13 @@ QDateEdit::drop-down {{
 
         fixed_labels = self._get_fixed_rate_labels(tariff_type)
         zone = self._classify_local_tariff_zone(reading_start, tariff_type)
-        if zone == "low":
-            return fixed_labels[0]
-        if zone == "high" and len(fixed_labels) > 2:
-            return fixed_labels[2]
-        return fixed_labels[1]
+        try:
+            index = int(zone)
+        except ValueError:
+            index = 0
+        if 0 <= index < len(fixed_labels):
+            return fixed_labels[index]
+        return fixed_labels[-1]
 
     def _apply_tariff_agreement(
         self,
@@ -2170,20 +2438,46 @@ QDateEdit::drop-down {{
         self._persist_requested_tariff_display_name(agreement.display_name)
 
         detected_type = self._resolve_tariff_type_from_display_name(agreement.display_name)
+        if detected_type is None and api_tariff_settings is not None:
+            detected_type = api_tariff_settings.tariff_type
+        if detected_type is None and self.current_tariff_rates:
+            detected_type = TARIFF_THREE_ZONES if len(self.current_tariff_rates) >= 3 else TARIFF_TWO_ZONES
+
         if detected_type is None:
-            self._set_excel_export_support(False, "Excel-Export wird fuer diesen Tarif aktuell nicht unterstuetzt.")
-            QMessageBox.warning(
-                self.window,
-                "Tarif nicht unterstuetzt",
-                f"Dieser Tarif wird aktuell noch nicht unterstuetzt: {agreement.display_name}",
-            )
-            return
+            if len(self.current_tariff_rates) in {2, 3}:
+                detected_type = TARIFF_THREE_ZONES if len(self.current_tariff_rates) >= 3 else TARIFF_TWO_ZONES
+            else:
+                self._set_excel_export_support(False, "Excel-Export wird fuer diesen Tarif aktuell nicht unterstuetzt.")
+                QMessageBox.warning(
+                    self.window,
+                    "Tarif nicht unterstuetzt",
+                    f"Dieser Tarif wird aktuell noch nicht unterstuetzt: {agreement.display_name}",
+                )
+                return
 
         defaults = get_default_tariff_settings_for_type(detected_type)
         try:
             base_price = self._parse_decimal_input(self.base_price_line_edit.text())
         except ValueError:
             base_price = defaults.monthly_base_price_eur
+
+        if api_tariff_settings is None and self.current_tariff_rates:
+            if detected_type == TARIFF_THREE_ZONES and len(self.current_tariff_rates) >= 3:
+                api_tariff_settings = TariffSettings(
+                    tariff_type=TARIFF_THREE_ZONES,
+                    low_ct=self.current_tariff_rates[0].rate_ct,
+                    standard_ct=self.current_tariff_rates[1].rate_ct,
+                    high_ct=self.current_tariff_rates[2].rate_ct,
+                    monthly_base_price_eur=base_price,
+                )
+            elif detected_type == TARIFF_TWO_ZONES and len(self.current_tariff_rates) >= 2:
+                api_tariff_settings = TariffSettings(
+                    tariff_type=TARIFF_TWO_ZONES,
+                    low_ct=self.current_tariff_rates[0].rate_ct,
+                    standard_ct=self.current_tariff_rates[1].rate_ct,
+                    high_ct=0.0,
+                    monthly_base_price_eur=base_price,
+                )
 
         if (
             api_tariff_settings is not None
@@ -2192,14 +2486,11 @@ QDateEdit::drop-down {{
             defaults = api_tariff_settings
             base_price = api_tariff_settings.monthly_base_price_eur
             self._set_excel_export_support(True)
-        elif self.current_tariff_rates:
-            self._set_excel_export_support(
-                False,
-                "Excel-Export ist fuer die live abgerufene Tarifstruktur nicht kompatibel. "
-                "Bitte CSV, JSON oder YAML verwenden.",
-            )
         else:
-            self._set_excel_export_support(True)
+            self._set_excel_export_support(
+                len(self.current_tariff_rates) in {2, 3},
+                "" if len(self.current_tariff_rates) in {2, 3} else "Excel-Export ist fuer diese Tarifstruktur nicht verfuegbar.",
+            )
 
         self._set_tariff_inputs(
             detected_type,
@@ -2208,7 +2499,8 @@ QDateEdit::drop-down {{
             self.current_tariff_rates[2].rate_ct if len(self.current_tariff_rates) > 2 else defaults.high_ct,
             base_price,
         )
-        self.save_config()
+        if not self._demo_mode:
+            self.save_config()
 
     def on_format_changed(self, _value: str | None = None) -> None:
         previous_format = getattr(self, "last_output_format", "excel")
@@ -2501,10 +2793,14 @@ QDateEdit::drop-down {{
                 continue
 
             rate_name = self._get_rate_name_for_reading(reading["start"], self.current_tariff_type)
-            buckets[index].rate_values_kwh[rate_name] = (
-                buckets[index].rate_values_kwh.get(rate_name, 0.0)
-                + float(reading["consumption_kwh"])
-            )
+            net_value = float(reading.get("net_kwh", reading["consumption_kwh"]))
+            if net_value >= 0:
+                buckets[index].rate_values_kwh[rate_name] = (
+                    buckets[index].rate_values_kwh.get(rate_name, 0.0)
+                    + net_value
+                )
+            else:
+                buckets[index].generation_kwh += abs(net_value)
             buckets[index].meter_reading_kwh = float(reading["meter_reading_kwh"])
 
         return buckets, title, first_column_title, start_date, end_date
@@ -2531,6 +2827,7 @@ QDateEdit::drop-down {{
             for reading in build_readings_with_meter_reading(self.existing_data):
                 reading_start = self._display_datetime(reading["start"])
                 consumption_value = float(reading["consumption_kwh"])
+                net_value = float(reading.get("net_kwh", consumption_value))
 
                 if reading_start < start_dt or reading_start >= end_dt:
                     continue
@@ -2539,14 +2836,15 @@ QDateEdit::drop-down {{
                     f"{GERMAN_WEEKDAY_NAMES[reading_start.weekday()]}, "
                     f"{reading_start.strftime('%d.%m.%Y %H:00')}"
                 )
-                consumption_text = f"{self._format_decimal(consumption_value, 3)} kWh"
+                consumption_text = f"{self._format_decimal(abs(net_value), 3)} kWh"
                 meter_text = f"{self._format_decimal(float(reading['meter_reading_kwh']), 3)} kWh"
                 tariff_name = self._get_rate_name_for_reading(reading["start"], tariff_type)
+                direction_text = "Einspeisung" if net_value < 0 else "Verbrauch"
 
                 row_items = [
                     QStandardItem(timestamp_label),
                     QStandardItem(meter_text),
-                    QStandardItem(consumption_text),
+                    QStandardItem(f"{direction_text}: {consumption_text}"),
                     QStandardItem(tariff_name),
                 ]
                 for item in row_items[1:3]:
@@ -2610,6 +2908,12 @@ QDateEdit::drop-down {{
                         for rate_name in rate_order
                     ]
                     total_value = f"{self._format_decimal(bucket.total_kwh, 3)} kWh"
+                    if bucket.total_generation_kwh:
+                        total_value = (
+                            f"{self._format_decimal(bucket.net_kwh, 3)} kWh "
+                            f"(Verbrauch {self._format_decimal(bucket.total_kwh, 3)} kWh, "
+                            f"Einspeisung {self._format_decimal(bucket.total_generation_kwh, 3)} kWh)"
+                        )
 
                 row_items = [QStandardItem(bucket.tooltip_label), QStandardItem(meter_text)]
                 row_items.extend(QStandardItem(value) for value in rate_values)
@@ -2664,7 +2968,7 @@ QDateEdit::drop-down {{
     def _refresh_analysis_view(self) -> None:
         tariff_values = self._get_tariff_values(show_error=False)
         if tariff_values is None:
-            tariff_type = TARIFF_INTELLIGENT_GO
+            tariff_type = TARIFF_TWO_ZONES
             tariff_go_ct = DEFAULT_TARIFF_GO_CT
             tariff_standard_ct = DEFAULT_TARIFF_STANDARD_CT
             tariff_high_ct = 0.0
@@ -2683,8 +2987,10 @@ QDateEdit::drop-down {{
         rate_prices = self._get_analysis_rate_prices(tariff_type)
 
         total_kwh = sum(bucket.total_kwh for bucket in buckets)
+        total_generation_kwh = sum(bucket.total_generation_kwh for bucket in buckets)
+        net_kwh = sum(bucket.net_kwh for bucket in buckets)
         variable_total_eur = sum(bucket.total_cost_eur(rate_prices) for bucket in buckets)
-        has_readings = total_kwh > 0
+        has_readings = total_kwh > 0 or total_generation_kwh > 0
         base_price_share = (
             self._calculate_base_price_share(start_date, end_date, monthly_base_price_eur)
             if has_readings
@@ -2707,12 +3013,21 @@ QDateEdit::drop-down {{
                 f"{self._format_decimal(variable_total_eur + base_price_share, 2)} EUR"
             )
         else:
-            self.view_total_caption_label.setText("Gesamtverbrauch")
-            self.view_total_value_label.setText(f"{self._format_decimal(total_kwh, 3)} kWh")
+            if total_generation_kwh:
+                self.view_total_caption_label.setText("Verbrauch / Einspeisung / Netto")
+                self.view_total_value_label.setText(
+                    f"{self._format_decimal(total_kwh, 3)} / "
+                    f"{self._format_decimal(total_generation_kwh, 3)} / "
+                    f"{self._format_decimal(net_kwh, 3)} kWh"
+                )
+            else:
+                self.view_total_caption_label.setText("Gesamtverbrauch")
+                self.view_total_value_label.setText(f"{self._format_decimal(total_kwh, 3)} kWh")
 
         self.chart_view.update_buckets(
             buckets,
             show_currency=show_currency,
+            show_generation=total_generation_kwh > 0,
             rate_order=rate_order,
             rate_prices_ct=rate_prices,
             category_axis_title=first_column_title,
@@ -2746,24 +3061,29 @@ QDateEdit::drop-down {{
 
             self.email_line_edit.setText(config.get("email", ""))
             self.password_line_edit.setText(config.get("password", ""))
+            if not self._demo_mode and self.email_line_edit.text().strip() == "test" and self.password_line_edit.text().strip() == "test":
+                self.email_line_edit.clear()
+                self.password_line_edit.clear()
             self.save_config_checkbox.setChecked(bool(config_saving_enabled))
             self.debug_checkbox.setChecked(bool(config.get("debug", False)))
             self.auto_output_checkbox.setChecked(bool(config.get(AUTO_OUTPUT_FLAG, False)))
             self.use_local_time_checkbox.setChecked(bool(config.get(USE_LOCAL_TIME_CONFIG_KEY, True)))
+            self.accounts = self._deserialize_accounts(config.get(ACCOUNTS_CONFIG_KEY, []))
+            self.selected_account_number = config.get(SELECTED_ACCOUNT_NUMBER_CONFIG_KEY)
+            self._refresh_account_combo()
 
             self.output_format_combo.blockSignals(True)
             self.output_format_combo.setCurrentText(saved_format)
             self.output_format_combo.blockSignals(False)
             self.last_output_format = saved_format
-            saved_tariff_type = config.get(TARIFF_TYPE_CONFIG_KEY, TARIFF_INTELLIGENT_GO)
+            saved_tariff_type = config.get(TARIFF_TYPE_CONFIG_KEY, TARIFF_TWO_ZONES)
             saved_display_name = config.get(
                 LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY,
                 config.get(LAST_TARIFF_CODE_CONFIG_KEY, "None"),
             )
             if saved_display_name not in {"", "None", None}:
-                inferred_tariff_type = self._resolve_tariff_type_from_display_name(saved_display_name)
-                if inferred_tariff_type is not None:
-                    saved_tariff_type = inferred_tariff_type
+                saved_display_name, inferred_tariff_type = self._tariff_name_and_model(saved_display_name)
+                saved_tariff_type = inferred_tariff_type
             self.current_tariff_type = saved_tariff_type
             self.current_tariff_rates = self._deserialize_tariff_rates(config.get(TARIFF_RATES_CONFIG_KEY))
             self._excel_export_supported = bool(
@@ -2793,25 +3113,25 @@ QDateEdit::drop-down {{
                 saved_tariff_type,
                 self._get_config_decimal(
                     config,
-                    "tariff_heat_low_ct" if saved_tariff_type == TARIFF_INTELLIGENT_HEAT else "tariff_go_ct",
+                    "tariff_heat_low_ct" if saved_tariff_type == TARIFF_THREE_ZONES else "tariff_go_ct",
                     self.default_tariff_settings.get(
-                        "tariff_heat_low_ct" if saved_tariff_type == TARIFF_INTELLIGENT_HEAT else "tariff_go_ct",
-                        DEFAULT_TARIFF_HEAT_LOW_CT if saved_tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_GO_CT,
+                        "tariff_heat_low_ct" if saved_tariff_type == TARIFF_THREE_ZONES else "tariff_go_ct",
+                        DEFAULT_TARIFF_HEAT_LOW_CT if saved_tariff_type == TARIFF_THREE_ZONES else DEFAULT_TARIFF_GO_CT,
                     ),
                 ),
                 self._get_config_decimal(
                     config,
-                    "tariff_heat_standard_ct" if saved_tariff_type == TARIFF_INTELLIGENT_HEAT else "tariff_standard_ct",
+                    "tariff_heat_standard_ct" if saved_tariff_type == TARIFF_THREE_ZONES else "tariff_standard_ct",
                     self.default_tariff_settings.get(
-                        "tariff_heat_standard_ct" if saved_tariff_type == TARIFF_INTELLIGENT_HEAT else "tariff_standard_ct",
-                        DEFAULT_TARIFF_HEAT_STANDARD_CT if saved_tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_STANDARD_CT,
+                        "tariff_heat_standard_ct" if saved_tariff_type == TARIFF_THREE_ZONES else "tariff_standard_ct",
+                        DEFAULT_TARIFF_HEAT_STANDARD_CT if saved_tariff_type == TARIFF_THREE_ZONES else DEFAULT_TARIFF_STANDARD_CT,
                     ),
                 ),
                 self._get_config_decimal(
                     config,
                     "tariff_heat_high_ct",
                     self.default_tariff_settings.get("tariff_heat_high_ct", DEFAULT_TARIFF_HEAT_HIGH_CT),
-                ) if saved_tariff_type == TARIFF_INTELLIGENT_HEAT else 0.0,
+                ) if saved_tariff_type == TARIFF_THREE_ZONES else 0.0,
                 self._get_config_decimal(
                     config,
                     "monthly_base_price_eur",
@@ -2821,9 +3141,10 @@ QDateEdit::drop-down {{
                     ),
                 ),
             )
-            self.current_tariff_display_name = (
-                saved_display_name if saved_display_name not in {None, ""} else "None"
-            )
+            self.current_tariff_display_name = saved_display_name if saved_display_name not in {None, ""} else "None"
+            self.tariff_type_combo.blockSignals(True)
+            self.tariff_type_combo.setText(self.current_tariff_display_name if self.current_tariff_display_name not in {None, ""} else saved_tariff_type)
+            self.tariff_type_combo.blockSignals(False)
             self.reference_readings = self._deserialize_reference_readings(
                 config.get(REFERENCE_READINGS_CONFIG_KEY, [])
             )
@@ -2832,12 +3153,13 @@ QDateEdit::drop-down {{
 
             self.on_format_changed(saved_format)
             self._update_settings_data_summary()
+            self._refresh_reference_readings_table()
             self._refresh_analysis_view()
 
             if migrated:
                 self._set_status("Konfiguration geladen und Zugangsdaten verschluesselt migriert")
             else:
-                self._set_status("Konfiguration aus config.json geladen")
+                self._set_status("Konfiguration aus config.yaml geladen")
         except Exception as exc:
             self._has_saved_base_price = False
             self._update_settings_data_summary()
@@ -2849,7 +3171,7 @@ QDateEdit::drop-down {{
             self.latest_timestamp = None
             self.csv_path.parent.mkdir(parents=True, exist_ok=True)
 
-            existing_data, latest_end = load_existing_consumption_data()
+            existing_data, latest_end = load_existing_consumption_data(self.selected_account_number)
             if not existing_data:
                 self._update_settings_data_summary()
                 self._set_status("Keine Verbrauchsdaten gefunden. Bereit zum Abruf aller Daten.")
@@ -2874,6 +3196,7 @@ QDateEdit::drop-down {{
                 )
             self.latest_timestamp = latest_end
             self._update_settings_data_summary()
+            self._refresh_reference_readings_table()
 
             self._set_default_analysis_date()
             self._refresh_analysis_view()
@@ -2900,7 +3223,7 @@ QDateEdit::drop-down {{
 
         tariff_values = self._get_tariff_values(show_error=False)
         if tariff_values is None:
-            tariff_type = TARIFF_INTELLIGENT_GO
+            tariff_type = TARIFF_TWO_ZONES
             tariff_go_ct = DEFAULT_TARIFF_GO_CT
             tariff_standard_ct = DEFAULT_TARIFF_STANDARD_CT
             tariff_high_ct = 0.0
@@ -2908,8 +3231,6 @@ QDateEdit::drop-down {{
         else:
             tariff_type, tariff_go_ct, tariff_standard_ct, tariff_high_ct, monthly_base_price_eur = tariff_values
         config = {
-            "email": self.email_line_edit.text(),
-            "password": self.password_line_edit.text(),
             "output_format": self.output_format_combo.currentText(),
             "from_date": self._date_to_string(self.from_date_edit),
             "debug": self.debug_checkbox.isChecked(),
@@ -2919,17 +3240,26 @@ QDateEdit::drop-down {{
             LAST_TARIFF_DISPLAY_NAME_CONFIG_KEY: self.current_tariff_display_name or "None",
             "tariff_go_ct": tariff_go_ct,
             "tariff_standard_ct": tariff_standard_ct,
-            "tariff_heat_low_ct": tariff_go_ct if tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_HEAT_LOW_CT,
-            "tariff_heat_standard_ct": tariff_standard_ct if tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_HEAT_STANDARD_CT,
-            "tariff_heat_high_ct": tariff_high_ct if tariff_type == TARIFF_INTELLIGENT_HEAT else DEFAULT_TARIFF_HEAT_HIGH_CT,
+            "tariff_heat_low_ct": tariff_go_ct if tariff_type == TARIFF_THREE_ZONES else DEFAULT_TARIFF_HEAT_LOW_CT,
+            "tariff_heat_standard_ct": tariff_standard_ct if tariff_type == TARIFF_THREE_ZONES else DEFAULT_TARIFF_HEAT_STANDARD_CT,
+            "tariff_heat_high_ct": tariff_high_ct if tariff_type == TARIFF_THREE_ZONES else DEFAULT_TARIFF_HEAT_HIGH_CT,
             "monthly_base_price_eur": monthly_base_price_eur,
             CONFIG_SAVE_FLAG: self.save_config_checkbox.isChecked(),
             "output_file": str(self._get_normalized_output_path()),
             "excel_file": str(self._get_normalized_output_path()),
+            ACCOUNTS_CONFIG_KEY: self._serialize_accounts(),
+            SELECTED_ACCOUNT_NUMBER_CONFIG_KEY: self.selected_account_number,
             REFERENCE_READINGS_CONFIG_KEY: self._serialize_reference_readings(),
             SELECTED_REFERENCE_ID_CONFIG_KEY: self.selected_reference_id,
             USE_LOCAL_TIME_CONFIG_KEY: self.use_local_time_checkbox.isChecked(),
         }
+        email_value = self.email_line_edit.text()
+        password_value = self.password_line_edit.text()
+        if not self._demo_mode and email_value.strip() == "test" and password_value.strip() == "test":
+            email_value = ""
+            password_value = ""
+        config["email"] = email_value
+        config["password"] = password_value
         config.pop(LAST_TARIFF_CODE_CONFIG_KEY, None)
 
         if self.current_tariff_rates:
@@ -2964,13 +3294,12 @@ QDateEdit::drop-down {{
         if self._get_tariff_values(show_error=True) is None:
             return False
 
-        if (
-            self.auto_output_checkbox.isChecked()
-            and self.output_format_combo.currentText() == "excel"
-            and not self._excel_export_supported
-        ):
-            self._show_error(self._excel_export_reason or "Excel-Export ist fuer diesen Tarif nicht verfuegbar.")
-            return False
+        if self.auto_output_checkbox.isChecked() and self.output_format_combo.currentText() == "excel":
+            self._excel_export_supported = self._can_export_excel_now()
+            self._excel_export_reason = "" if self._excel_export_supported else "Excel-Export ist fuer diesen Tarif nicht verfuegbar."
+            if not self._excel_export_supported:
+                self._show_error(self._excel_export_reason)
+                return False
 
         self._normalize_output_entry()
 
@@ -2990,15 +3319,30 @@ QDateEdit::drop-down {{
         if self._get_tariff_values(show_error=True) is None:
             return False
 
-        if (
-            self.output_format_combo.currentText() == "excel"
-            and not self._excel_export_supported
-        ):
-            self._show_error(self._excel_export_reason or "Excel-Export ist fuer diesen Tarif nicht verfuegbar.")
-            return False
+        if self.output_format_combo.currentText() == "excel":
+            self._excel_export_supported = self._can_export_excel_now()
+            self._excel_export_reason = "" if self._excel_export_supported else "Excel-Export ist fuer diesen Tarif nicht verfuegbar."
+            if not self._excel_export_supported:
+                self._show_error(self._excel_export_reason)
+                return False
 
         self._normalize_output_entry()
         return True
+
+    def _infer_excel_tariff_type(self) -> str:
+        if self.current_tariff_rates:
+            return TARIFF_THREE_ZONES if len(self.current_tariff_rates) >= 3 else TARIFF_TWO_ZONES
+        return self.current_tariff_type if self.current_tariff_type in {TARIFF_TWO_ZONES, TARIFF_THREE_ZONES} else TARIFF_TWO_ZONES
+
+    def _matches_excel_tariff_type(self, workbook_type: str, current_type: str) -> bool:
+        workbook_is_heat = workbook_type in {TARIFF_THREE_ZONES, TARIFF_INTELLIGENT_HEAT}
+        current_is_heat = current_type in {TARIFF_THREE_ZONES, TARIFF_INTELLIGENT_HEAT}
+        return workbook_is_heat == current_is_heat
+
+    def _can_export_excel_now(self) -> bool:
+        if self.current_tariff_rates:
+            return len(self.current_tariff_rates) in {2, 3}
+        return self.current_tariff_type in {TARIFF_TWO_ZONES, TARIFF_THREE_ZONES}
 
     def _write_csv_file(self, path: Path, readings: list[dict]) -> None:
         export_rows = build_readings_with_meter_reading(readings)
@@ -3026,6 +3370,7 @@ QDateEdit::drop-down {{
             pass
 
         if format_type == "excel":
+            self._excel_export_supported = self._can_export_excel_now()
             if not self._excel_export_supported:
                 raise Exception(
                     self._excel_export_reason
@@ -3033,13 +3378,25 @@ QDateEdit::drop-down {{
                 )
             current_tariff_values = self._get_tariff_values(show_error=False)
             if current_tariff_values is None:
-                raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
-            current_tariff_type, tariff_go_ct, tariff_standard_ct, tariff_high_ct, monthly_base_price_eur = current_tariff_values
+                current_tariff_type = self._infer_excel_tariff_type()
+                if current_tariff_type == TARIFF_THREE_ZONES and len(self.current_tariff_rates) >= 3:
+                    tariff_go_ct = self.current_tariff_rates[0].rate_ct
+                    tariff_standard_ct = self.current_tariff_rates[1].rate_ct
+                    tariff_high_ct = self.current_tariff_rates[2].rate_ct
+                elif len(self.current_tariff_rates) >= 2:
+                    tariff_go_ct = self.current_tariff_rates[0].rate_ct
+                    tariff_standard_ct = self.current_tariff_rates[1].rate_ct
+                    tariff_high_ct = 0.0
+                else:
+                    raise Exception("Tarifeinstellungen konnten nicht gelesen werden")
+                monthly_base_price_eur = DEFAULT_MONTHLY_BASE_PRICE_EUR
+            else:
+                current_tariff_type, tariff_go_ct, tariff_standard_ct, tariff_high_ct, monthly_base_price_eur = current_tariff_values
 
             template_path = output_path
             if output_path.exists():
                 existing_template_type = detect_excel_template_type(output_path)
-                if existing_template_type != current_tariff_type:
+                if not self._matches_excel_tariff_type(existing_template_type, current_tariff_type):
                     raise Exception(
                         "Die ausgewaehlte Excel-Datei passt nicht zum aktuellen Tarifmodell. "
                         f"Datei: {existing_template_type}, aktueller Tarif: {current_tariff_type}."
@@ -3212,7 +3569,8 @@ QDateEdit::drop-down {{
             data_dir.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
-        self.save_config()
+        if not self._demo_mode:
+            self.save_config()
         self._start_progress()
         previous_cached_readings = list(self.existing_data)
 
@@ -3236,6 +3594,49 @@ QDateEdit::drop-down {{
                         bool(self.existing_data)
                         and not consumption_csv_has_api_format(self.consumption_csv_path)
                     )
+
+                    if self._demo_mode:
+                        demo_name, demo_settings, demo_rates = get_demo_tariff_profile(
+                            self._demo_mode_name or "2"
+                        )
+                        self.current_tariff_display_name = demo_name
+                        self.current_tariff_type = demo_settings.tariff_type
+                        self.current_tariff_rates = demo_rates
+                        self._set_tariff_inputs(
+                            demo_settings.tariff_type,
+                            demo_settings.low_ct,
+                            demo_settings.standard_ct,
+                            demo_settings.high_ct,
+                            demo_settings.monthly_base_price_eur,
+                        )
+                        self._set_excel_export_support(
+                            demo_settings.tariff_type in {TARIFF_TWO_ZONES, TARIFF_THREE_ZONES},
+                            "" if demo_settings.tariff_type in {TARIFF_TWO_ZONES, TARIFF_THREE_ZONES}
+                            else "Excel-Export ist fuer diese Demo-Tarifstruktur nicht verfuegbar.",
+                        )
+                        self._set_status("Demo-Daten werden erzeugt...", update=True)
+                        new_readings = self._build_demo_readings(period_from, period_to + timedelta(seconds=1))
+                        self.existing_data = merge_readings(new_readings, [])
+                        self.latest_timestamp = max((reading["end"] for reading in self.existing_data), default=None)
+                        if self.existing_data:
+                            self.existing_data = build_readings_with_meter_reading(
+                                self.existing_data,
+                            )
+                            self.latest_timestamp = max(
+                                (normalize_datetime(reading["end"]) for reading in self.existing_data),
+                                default=None,
+                            )
+                        if not write_readings_json(self.existing_data, self.csv_path):
+                            raise Exception("Fehler beim Schreiben der JSON-Ausgabedatei")
+                        if not write_consumption_csv(self.existing_data, self.consumption_csv_path):
+                            raise Exception("Fehler beim Schreiben der CSV-Ausgabedatei")
+                        self._set_default_analysis_date(force=True)
+                        self._refresh_analysis_view()
+                        self._set_status(
+                            f"Demo-Modus fertig: {len(self.existing_data)} Eintraege simuliert",
+                            update=True,
+                        )
+                        return
 
                     if self.latest_timestamp and self.latest_timestamp.date() >= (today - timedelta(days=1)).date():
                         self._set_status(
@@ -3294,15 +3695,22 @@ QDateEdit::drop-down {{
                             "Kein Konto gefunden! Ueberpruefen Sie Ihre Zugangsdaten.",
                         )
 
-                    if len(accounts) > 1:
-                        account_list = "\n".join(
-                            [f"  - {account.get('number', 'unknown')}" for account in accounts]
-                        )
-                        raise Exception(
-                            f"Mehrere Konten gefunden ({len(accounts)}). Bitte waehlen Sie ein Konto aus:\n{account_list}"
-                        )
-
-                    account_number = accounts[0].get("number")
+                    self.accounts = self._deserialize_accounts(accounts)
+                    if not self.accounts:
+                        self.accounts = [
+                            {
+                                "number": str(account.get("number", "")),
+                                "id": str(account.get("id", "")),
+                                "is_active": bool(account.get("is_active") or account.get("active") or account.get("status") == "ACTIVE"),
+                            }
+                            for account in accounts
+                            if account.get("number")
+                        ]
+                    self.selected_account_number = self._choose_default_account_number()
+                    self._refresh_account_combo()
+                    account_number = self.selected_account_number
+                    if account_number is None and accounts:
+                        account_number = str(accounts[0].get("number"))
                     active_agreement = client.get_active_tariff_agreement(account_number)
                     api_tariff_settings = None
                     api_tariff_rates: list[TariffRate] = []
@@ -3323,33 +3731,34 @@ QDateEdit::drop-down {{
 
                     reference_reading = self._get_selected_reference_reading()
 
+                    if client is None or account_number is None:
+                        raise Exception("Kundendaten konnten nicht geladen werden")
+                    meter_info = client.find_smart_meter(account_number)
+                    if not meter_info:
+                        self._raise_client_error(
+                            client,
+                            "beim Laden der Zaehlerdaten",
+                            "Kein Smart Meter fuer diesen Account gefunden!\n\n"
+                            "Moegliche Gruende:\n"
+                            "- Smart meter noch nicht eingerichtet\n"
+                            "- Kein smart meter gefunden\n"
+                            "- Falsche Kundennummer"
+                        )
+
+                    malo_number, meter_id, property_id = meter_info
+                    self._merge_reference_readings(
+                        client.get_meter_reference_readings(account_number, meter_id)
+                    )
+                    reference_reading = self._get_selected_reference_reading()
+                    if not self._demo_mode:
+                        self.save_config(force=True)
+
                     if need_to_fetch:
                         self._set_status(
                             f"Kundennummer gefunden: {account_number}",
                             update=True,
                         )
                         self._set_status("Zaehler werden ermittelt...", update=True)
-
-                        if client is None or account_number is None:
-                            raise Exception("Kundendaten konnten nicht geladen werden")
-                        meter_info = client.find_smart_meter(account_number)
-                        if not meter_info:
-                            self._raise_client_error(
-                                client,
-                                "beim Laden der Zaehlerdaten",
-                                "Kein Smart Meter fuer diesen Account gefunden!\n\n"
-                                "Moegliche Gruende:\n"
-                                "- Smart meter noch nicht eingerichtet\n"
-                                "- Kein smart meter gefunden\n"
-                                "- Falsche Kundennummer"
-                            )
-
-                        malo_number, meter_id, property_id = meter_info
-                        self._merge_reference_readings(
-                            client.get_meter_reference_readings(account_number, meter_id)
-                        )
-                        reference_reading = self._get_selected_reference_reading()
-                        self.save_config(force=True)
                         self._set_status(
                             f"Zaehler fuer MALO {malo_number} gefunden, Daten werden abgerufen...",
                             update=True,
@@ -3445,22 +3854,23 @@ QDateEdit::drop-down {{
                             normalize_datetime(reading["end"]) for reading in self.existing_data
                         )
                     self._update_settings_data_summary()
+                    self._refresh_reference_readings_table()
 
                     if readings_changed(previous_cached_readings, self.existing_data):
                         self._set_status(
-                            f"Speichere {len(self.existing_data)} Eintraege in readings.json...",
+                            f"Speichere {len(self.existing_data)} Eintraege im YAML-Cache...",
                             update=True,
                         )
                         if not write_readings_json(self.existing_data, self.csv_path):
-                            raise Exception("readings.json konnte nicht gespeichert werden")
+                            raise Exception("YAML-Cache konnte nicht gespeichert werden")
                         if not write_consumption_csv(self.existing_data, self.consumption_csv_path):
-                            raise Exception("consumption.csv konnte nicht gespeichert werden")
+                            raise Exception("Verbrauchs-YAML konnte nicht gespeichert werden")
                     elif csv_needs_api_refresh:
                         if not write_consumption_csv(self.existing_data, self.consumption_csv_path):
-                            raise Exception("consumption.csv konnte nicht gespeichert werden")
+                            raise Exception("Verbrauchs-YAML konnte nicht gespeichert werden")
                     else:
                         self._set_status(
-                            "Keine neuen Eintraege fuer readings.json gefunden.",
+                            "Keine neuen Eintraege fuer den YAML-Cache gefunden.",
                             update=True,
                         )
 
@@ -3469,7 +3879,7 @@ QDateEdit::drop-down {{
                     else:
                         self._show_info(
                             "Daten erfolgreich gespeichert!\n\n"
-                            f"Cache: readings.json ({len(self.existing_data)} Eintraege)\n"
+                            f"Cache: YAML ({len(self.existing_data)} Eintraege)\n"
                             "Automatische Ausgabe ist deaktiviert."
                         )
 
@@ -3483,6 +3893,7 @@ QDateEdit::drop-down {{
                         traceback.print_exc()
                     raise
         except Exception as exc:
+            traceback.print_exc()
             self._show_error(f"Ein Fehler ist aufgetreten:\n\n{exc}")
             self._set_status(f"Fehler: {exc}")
         finally:
@@ -3495,6 +3906,11 @@ def main() -> None:
         "--debug",
         action="store_true",
         help="Print GraphQL requests and responses to the console and debug log",
+    )
+    parser.add_argument(
+        "--testmode",
+        choices=("2", "3", "dynamically"),
+        help="Start the app in demo mode with a simulated tariff profile",
     )
     args, qt_args = parser.parse_known_args(sys.argv[1:])
 
@@ -3515,7 +3931,7 @@ def main() -> None:
     global CONFIG_WRITABLE
     CONFIG_WRITABLE = ok
 
-    gui = OctopusSmartMeterGUI(app, debug_enabled=args.debug)
+    gui = OctopusSmartMeterGUI(app, debug_enabled=args.debug, testmode=args.testmode)
     gui.show()
     app.exec()
 
