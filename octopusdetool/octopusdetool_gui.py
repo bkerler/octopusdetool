@@ -676,6 +676,7 @@ class OctopusSmartMeterGUI:
         self.output_file_line_edit = self._find_widget(QLineEdit, "outputFileLineEdit")
         self.browse_output_button = self._find_widget(QPushButton, "browseOutputButton")
         self.export_existing_button = self._find_widget(QPushButton, "exportExistingButton")
+        self.date_group_box = self._find_widget(QGroupBox, "dateGroupBox")
         self.from_date_edit = self._find_widget(QDateEdit, "fromDateEdit")
         self.to_date_edit = self._find_widget(QDateEdit, "toDateEdit")
         self.status_value_label = self._find_widget(QLabel, "statusValueLabel")
@@ -924,6 +925,8 @@ QDateEdit::drop-down {{
     def _open_range_calendar_popup(self, date_edit: QDateEdit) -> None:
         self._active_range_date_edit = date_edit
         calendar = self.range_calendar_popup.calendar
+        calendar.setMinimumDate(date_edit.minimumDate())
+        calendar.setMaximumDate(date_edit.maximumDate())
         calendar.setSelectedDate(date_edit.date())
         year = date_edit.date().year()
         month = date_edit.date().month()
@@ -1169,6 +1172,7 @@ QDateEdit::drop-down {{
         self.analysis_content_tabs.setCurrentIndex(0)
         self.from_date_edit.setDate(QDate(2024, 1, 1))
         self.to_date_edit.setDate(QDate.currentDate())
+        self._apply_date_range_bounds(None, None)
         self.output_format_combo.setCurrentText("excel")
         self.auto_output_checkbox.setChecked(False)
         self.debug_output_line_edit.setText(str(get_smartmeter_data_folder() / "log.txt"))
@@ -2080,6 +2084,62 @@ QDateEdit::drop-down {{
         except ValueError:
             date_edit.setDate(fallback)
 
+    def _qdate_from_date(self, value: date) -> QDate:
+        return QDate(value.year, value.month, value.day)
+
+    def _agreement_date_bounds(
+        self,
+        agreement: TariffAgreement | None,
+    ) -> tuple[date | None, date | None]:
+        if agreement is None:
+            return None, None
+
+        start_date = self._parse_api_datetime_to_local_date(agreement.valid_from)
+        end_date = self._parse_api_datetime_to_local_date(agreement.valid_to)
+        if end_date is not None:
+            end_date = end_date - timedelta(days=1)
+        return start_date, end_date
+
+    def _apply_date_range_bounds(
+        self,
+        start_date: date | None,
+        end_date: date | None,
+    ) -> None:
+        default_min = QDate(2024, 1, 1)
+        default_max = QDate.currentDate()
+        min_qdate = self._qdate_from_date(start_date) if start_date is not None else default_min
+        max_qdate = self._qdate_from_date(end_date) if end_date is not None else default_max
+
+        if max_qdate > default_max:
+            max_qdate = default_max
+        if max_qdate < min_qdate:
+            max_qdate = min_qdate
+
+        for date_edit in (self.from_date_edit, self.to_date_edit):
+            date_edit.setDateRange(min_qdate, max_qdate)
+
+        if self.from_date_edit.date() < min_qdate:
+            self.from_date_edit.setDate(min_qdate)
+        if self.to_date_edit.date() > max_qdate:
+            self.to_date_edit.setDate(max_qdate)
+        if self.to_date_edit.date() < min_qdate:
+            self.to_date_edit.setDate(max_qdate)
+        if self.from_date_edit.date() > self.to_date_edit.date():
+            self.from_date_edit.setDate(self.to_date_edit.date())
+
+        if start_date is not None or end_date is not None:
+            min_text = min_qdate.toString("dd.MM.yyyy")
+            max_text = max_qdate.toString("dd.MM.yyyy")
+            title = f"Datumsbereich ({min_text} - {max_text})"
+            tooltip = f"Verfuegbarer Zeitraum fuer den aktiven Vertrag: {min_text} - {max_text}"
+        else:
+            title = "Datumsbereich"
+            tooltip = ""
+
+        self.date_group_box.setTitle(title)
+        self.from_date_edit.setToolTip(tooltip)
+        self.to_date_edit.setToolTip(tooltip)
+
     def _format_decimal_input(self, value: float) -> str:
         return f"{value:.2f}".replace(".", ",")
 
@@ -2426,6 +2486,7 @@ QDateEdit::drop-down {{
             self.current_tariff_valid_from = ""
             self.current_tariff_valid_to = ""
             self.current_tariff_rates = []
+            self._apply_date_range_bounds(None, None)
             self._set_excel_export_support(True)
             self._persist_requested_tariff_display_name("None")
             self.save_config()
@@ -2435,6 +2496,7 @@ QDateEdit::drop-down {{
         self.current_tariff_valid_from = agreement.valid_from
         self.current_tariff_valid_to = agreement.valid_to or ""
         self.current_tariff_rates = list(api_tariff_rates or [])
+        self._apply_date_range_bounds(*self._agreement_date_bounds(agreement))
         self._persist_requested_tariff_display_name(agreement.display_name)
 
         detected_type = self._resolve_tariff_type_from_display_name(agreement.display_name)
@@ -3499,7 +3561,13 @@ QDateEdit::drop-down {{
     def _expected_intervals_for_day(self, day: date) -> int:
         start_local = datetime(day.year, day.month, day.day, tzinfo=APP_TIMEZONE)
         end_local = datetime.combine(day + timedelta(days=1), time.min, tzinfo=APP_TIMEZONE)
-        return int((end_local.astimezone(APP_TIMEZONE) - start_local).total_seconds() // 3600)
+        return int(
+            (
+                end_local.astimezone(timezone.utc)
+                - start_local.astimezone(timezone.utc)
+            ).total_seconds()
+            // 3600
+        )
 
     def _get_incomplete_days(
         self,
@@ -3510,10 +3578,17 @@ QDateEdit::drop-down {{
         if start_dt > end_dt:
             return []
 
+        start_day = start_dt.date()
+        end_day = end_dt.date()
+        start_local = datetime(start_day.year, start_day.month, start_day.day, tzinfo=APP_TIMEZONE)
+        end_local = datetime.combine(end_day + timedelta(days=1), time.min, tzinfo=APP_TIMEZONE)
+        range_start_utc = start_local.astimezone(timezone.utc).replace(tzinfo=None)
+        range_end_utc = end_local.astimezone(timezone.utc).replace(tzinfo=None)
+
         in_range_readings: list[datetime] = []
         for reading in readings:
             reading_start = normalize_datetime(reading["start"])
-            if reading_start < start_dt or reading_start > end_dt:
+            if reading_start < range_start_utc or reading_start >= range_end_utc:
                 continue
             in_range_readings.append(reading_start)
 
@@ -3521,14 +3596,14 @@ QDateEdit::drop-down {{
             return []
 
         counts: dict[date, set[datetime]] = {}
-        cursor = min(in_range_readings).date()
-        end_date = end_dt.date()
-        while cursor <= end_date:
+        cursor = start_day
+        while cursor <= end_day:
             counts[cursor] = set()
             cursor += timedelta(days=1)
 
         for reading_start in in_range_readings:
-            counts.setdefault(reading_start.date(), set()).add(reading_start)
+            local_start = to_local_datetime(reading_start)
+            counts.setdefault(local_start.date(), set()).add(local_start)
 
         incomplete_days: list[date] = []
         for day, intervals in counts.items():
@@ -3536,6 +3611,38 @@ QDateEdit::drop-down {{
                 incomplete_days.append(day)
 
         return incomplete_days
+
+    def _parse_api_datetime_to_local_date(self, raw_value: str | None) -> date | None:
+        if not raw_value:
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(str(raw_value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+        return to_local_datetime(normalize_datetime(parsed)).date()
+
+    def _filter_days_for_agreement(
+        self,
+        days: list[date],
+        agreement: TariffAgreement | None,
+    ) -> list[date]:
+        if agreement is None:
+            return days
+
+        start_date = self._parse_api_datetime_to_local_date(agreement.valid_from)
+        end_date = self._parse_api_datetime_to_local_date(agreement.valid_to)
+
+        valid_days: list[date] = []
+        for day in days:
+            if start_date is not None and day < start_date:
+                continue
+            if end_date is not None and day >= end_date:
+                continue
+            valid_days.append(day)
+
+        return valid_days
 
     def _start_progress(self) -> None:
         self.fetch_data_button.setEnabled(False)
@@ -3800,6 +3907,10 @@ QDateEdit::drop-down {{
                         normalize_datetime(period_from),
                         normalize_datetime(period_to),
                     )
+                    incomplete_days = self._filter_days_for_agreement(
+                        incomplete_days,
+                        active_agreement,
+                    )
                     if incomplete_days:
                         if client is None:
                             self._set_status("Authentifizierung fuer fehlende Tage...", update=True)
@@ -3833,12 +3944,14 @@ QDateEdit::drop-down {{
                         )
                         fallback_readings: list[dict] = []
                         for missing_day in incomplete_days:
-                            day_readings = client.get_smart_usage(
-                                property_id=property_id,
-                                market_supply_point_id=malo_number,
-                                day=missing_day,
-                            )
-                            fallback_readings.extend(day_readings)
+                            for reading_direction in ("CONSUMPTION", "GENERATION"):
+                                day_readings = client.get_smart_usage(
+                                    property_id=property_id,
+                                    market_supply_point_id=malo_number,
+                                    day=missing_day,
+                                    reading_direction=reading_direction,
+                                )
+                                fallback_readings.extend(day_readings)
                         if fallback_readings:
                             all_readings.extend(fallback_readings)
 

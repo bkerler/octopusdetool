@@ -1015,6 +1015,11 @@ query getAccountMeasurements(
                         durationInSeconds
                     }
                     metaData {
+                        utilityFilters {
+                            ... on ElectricityFiltersOutput {
+                                readingDirection
+                            }
+                        }
                         statistics {
                             costExclTax {
                                 pricePerUnit {
@@ -1115,6 +1120,10 @@ def _extract_reading_direction(node: dict) -> str:
 
     if not isinstance(candidate, dict):
         candidate = {}
+
+    direct_direction = candidate.get("readingDirection")
+    if direct_direction is not None:
+        return _normalize_reading_direction(direct_direction)
 
     electricity_filters = candidate.get("electricityFilters")
     if not isinstance(electricity_filters, dict):
@@ -1658,120 +1667,129 @@ class OctopusGermanyClient:
             self._log_debug(f"Clamped period_to to yesterday: {period_to}")
         
         all_intervals = []
-        after_cursor = None
-        page_count = 0
+        total_page_count = 0
         max_pages = 100 if fetch_all else 1
         
         self._log_debug(f"Fetching measurements for property {property_id}")
         self._log_debug(f"fetch_all={fetch_all}, max_pages={max_pages}")
-        
-        while page_count < max_pages:
-            page_count += 1
-            
-            # Build variables for the measurements query
-            variables = {
-                "propertyId": property_id,
-                "first": 100,
-                "utilityFilters": [{
-                    "electricityFilters": {
-                        "readingFrequencyType": "HOUR_INTERVAL"
-                    }
-                }],
-                "timezone": "Europe/Berlin"
-            }
-            
-            if after_cursor:
-                variables["after"] = after_cursor
-            
-            # Add date filters if specified
-            if period_from:
-                variables["startAt"] = ensure_app_timezone(period_from).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            
-            if period_to:
-                variables["endAt"] = ensure_app_timezone(period_to).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-            
-            self._log_debug(f"Fetching page {page_count}, after={after_cursor}")
-            
-            result = self._graphql_request(MEASUREMENTS_QUERY, variables)
-            
-            if not result:
-                self._log_debug("No response data, stopping")
-                break
-            
-            property_data = result.get("property")
-            if not property_data:
-                self._log_debug(f"No property data in response: {result}")
-                break
-            
-            measurements_data = property_data.get("measurements")
-            if not measurements_data:
-                self._log_debug(f"No measurements data: {property_data}")
-                break
-            
-            edges = measurements_data.get("edges", [])
-            page_info = measurements_data.get("pageInfo", {})
-            
-            self._log_debug(f"Page {page_count}: Got {len(edges)} edges")
-            self._log_debug(f"Page info: hasNextPage={page_info.get('hasNextPage')}, endCursor={page_info.get('endCursor')}")
-            
-            if not edges:
-                self._log_debug("No more edges, stopping pagination")
-                break
-            
-            # Parse measurements from edges
-            for edge in edges:
-                node = edge.get("node", {})
-                value = node.get("value")
-                start_at = node.get("startAt")
-                end_at = node.get("endAt")
-                duration = node.get("durationInSeconds")
-                direction = _extract_reading_direction(node)
-                
-                if value is not None and start_at and end_at:
-                    try:
-                        start_time = normalize_datetime(
-                            datetime.fromisoformat(start_at.replace("Z", "+00:00"))
-                        )
-                        end_time = normalize_datetime(
-                            datetime.fromisoformat(end_at.replace("Z", "+00:00"))
-                        )
-                        
-                        all_intervals.append({
-                            "start": start_time,
-                            "end": end_time,
-                            "direction": direction,
-                            "energy_kwh": float(value),
-                            "consumption_kwh": float(value),
-                            "net_kwh": float(value) if direction == "CONSUMPTION" else -float(value),
-                            "duration_seconds": duration,
-                            "unit": node.get("unit", "kWh"),
-                            "api_start": str(start_at),
-                            "api_end": str(end_at),
-                            "api_value": str(value),
-                        })
-                    except (ValueError, TypeError) as e:
-                        self._log_debug(f"Error parsing measurement: {e}")
-                        continue
-            
-            # Report progress
-            if progress_callback:
-                progress_callback(len(all_intervals), page_count)
-            
-            # Check if there are more pages
-            if not page_info.get("hasNextPage"):
-                self._log_debug("No more pages available")
-                break
-            
-            after_cursor = page_info.get("endCursor")
-            
-            if not fetch_all:
-                self._log_debug("fetch_all=False, stopping after first page")
-                break
+
+        for requested_direction in ("CONSUMPTION", "GENERATION"):
+            after_cursor = None
+            page_count = 0
+
+            while page_count < max_pages:
+                page_count += 1
+                total_page_count += 1
+
+                # Build variables for the measurements query
+                variables = {
+                    "propertyId": property_id,
+                    "first": 100,
+                    "utilityFilters": [{
+                        "electricityFilters": {
+                            "readingFrequencyType": "HOUR_INTERVAL",
+                            "readingDirection": requested_direction,
+                        }
+                    }],
+                    "timezone": "Europe/Berlin"
+                }
+
+                if after_cursor:
+                    variables["after"] = after_cursor
+
+                # Add date filters if specified
+                if period_from:
+                    variables["startAt"] = ensure_app_timezone(period_from).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+                if period_to:
+                    variables["endAt"] = ensure_app_timezone(period_to).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+                self._log_debug(
+                    f"Fetching {requested_direction} page {page_count}, after={after_cursor}"
+                )
+
+                result = self._graphql_request(MEASUREMENTS_QUERY, variables)
+
+                if not result:
+                    self._log_debug(f"No {requested_direction} response data, stopping")
+                    break
+
+                property_data = result.get("property")
+                if not property_data:
+                    self._log_debug(f"No {requested_direction} property data in response: {result}")
+                    break
+
+                measurements_data = property_data.get("measurements")
+                if not measurements_data:
+                    self._log_debug(f"No {requested_direction} measurements data: {property_data}")
+                    break
+
+                edges = measurements_data.get("edges", [])
+                page_info = measurements_data.get("pageInfo", {})
+
+                self._log_debug(f"{requested_direction} page {page_count}: Got {len(edges)} edges")
+                self._log_debug(f"Page info: hasNextPage={page_info.get('hasNextPage')}, endCursor={page_info.get('endCursor')}")
+
+                if not edges:
+                    self._log_debug(f"No more {requested_direction} edges, stopping pagination")
+                    break
+
+                # Parse measurements from edges
+                for edge in edges:
+                    node = edge.get("node", {})
+                    value = node.get("value")
+                    start_at = node.get("startAt")
+                    end_at = node.get("endAt")
+                    duration = node.get("durationInSeconds")
+                    direction = _extract_reading_direction(node)
+                    if direction == "CONSUMPTION" and requested_direction == "GENERATION":
+                        direction = requested_direction
+
+                    if value is not None and start_at and end_at:
+                        try:
+                            start_time = normalize_datetime(
+                                datetime.fromisoformat(start_at.replace("Z", "+00:00"))
+                            )
+                            end_time = normalize_datetime(
+                                datetime.fromisoformat(end_at.replace("Z", "+00:00"))
+                            )
+
+                            all_intervals.append({
+                                "start": start_time,
+                                "end": end_time,
+                                "direction": direction,
+                                "energy_kwh": float(value),
+                                "consumption_kwh": float(value),
+                                "net_kwh": float(value) if direction == "CONSUMPTION" else -float(value),
+                                "duration_seconds": duration,
+                                "unit": node.get("unit", "kWh"),
+                                "api_start": str(start_at),
+                                "api_end": str(end_at),
+                                "api_value": str(value),
+                            })
+                        except (ValueError, TypeError) as e:
+                            self._log_debug(f"Error parsing {requested_direction} measurement: {e}")
+                            continue
+
+                # Report progress
+                if progress_callback:
+                    progress_callback(len(all_intervals), total_page_count)
+
+                # Check if there are more pages
+                if not page_info.get("hasNextPage"):
+                    self._log_debug(f"No more {requested_direction} pages available")
+                    break
+
+                after_cursor = page_info.get("endCursor")
+
+                if not fetch_all:
+                    self._log_debug("fetch_all=False, stopping after first page")
+                    break
         
         # Sort by start time
         all_intervals.sort(key=lambda x: x["start"])
         
-        self._log_debug(f"Total: Generated {len(all_intervals)} consumption intervals from {page_count} pages")
+        self._log_debug(f"Total: Generated {len(all_intervals)} measurement intervals from {total_page_count} pages")
         
         return all_intervals
 
@@ -2492,7 +2510,10 @@ def merge_readings(all_data: list, reference_reading: dict | None = None) -> lis
 
     seen = {}
     for reading in all_data:
-        key = reading['start'].isoformat()
+        key = (
+            reading['start'].isoformat(),
+            reading.get('direction', 'CONSUMPTION'),
+        )
         seen[key] = reading
 
     unique_data = list(seen.values())
