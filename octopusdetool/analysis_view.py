@@ -13,7 +13,7 @@ from PySide6.QtCharts import (
 )
 from PySide6.QtCore import QMargins, Qt
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter
-from PySide6.QtWidgets import QToolTip
+from PySide6.QtWidgets import QLabel
 
 
 @dataclass(slots=True)
@@ -60,6 +60,20 @@ class TariffChartView(QChartView):
         self._category_axis_title = ""
         self._value_axis_title = ""
         self._series: QStackedBarSeries | None = None
+        self._hover_label = QLabel(self.viewport())
+        self._hover_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._hover_label.setStyleSheet(
+            """
+            QLabel {
+                background-color: #240748;
+                border: 1px solid #6f4df6;
+                border-radius: 4px;
+                color: #f4eeff;
+                padding: 6px 8px;
+            }
+            """
+        )
+        self._hover_label.hide()
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setStyleSheet("background: transparent; border: none;")
         self.setMinimumHeight(380)
@@ -79,6 +93,7 @@ class TariffChartView(QChartView):
         category_axis_title: str,
         value_axis_title: str,
     ) -> None:
+        self._hide_hover_label()
         self._buckets = list(buckets)
         self._show_currency = show_currency
         self._show_generation = show_generation
@@ -225,9 +240,13 @@ class TariffChartView(QChartView):
 
         painter.end()
 
+    def leaveEvent(self, event) -> None:
+        self._hide_hover_label()
+        super().leaveEvent(event)
+
     def _on_bar_hovered(self, status: bool, index: int) -> None:
         if not status or index >= len(self._buckets):
-            QToolTip.hideText()
+            self._hide_hover_label()
             return
 
         bucket = self._buckets[index]
@@ -254,7 +273,26 @@ class TariffChartView(QChartView):
                 if rate_kwh:
                     lines.append(f"{rate_name}: {self._format_decimal(rate_kwh, 3)} kWh")
 
-        QToolTip.showText(QCursor.pos(), "\n".join(lines), self.viewport())
+        self._show_hover_label("\n".join(lines))
+
+    def _show_hover_label(self, text: str) -> None:
+        self._hover_label.setText(text)
+        self._hover_label.adjustSize()
+
+        position = self.viewport().mapFromGlobal(QCursor.pos())
+        x = position.x() + 14
+        y = position.y() + 14
+        if x + self._hover_label.width() > self.viewport().width():
+            x = position.x() - self._hover_label.width() - 14
+        if y + self._hover_label.height() > self.viewport().height():
+            y = position.y() - self._hover_label.height() - 14
+
+        self._hover_label.move(max(0, x), max(0, y))
+        self._hover_label.raise_()
+        self._hover_label.show()
+
+    def _hide_hover_label(self) -> None:
+        self._hover_label.hide()
 
     @staticmethod
     def _format_decimal(value: float, decimals: int) -> str:
