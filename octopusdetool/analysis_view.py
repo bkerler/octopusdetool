@@ -11,7 +11,7 @@ from PySide6.QtCharts import (
     QStackedBarSeries,
     QValueAxis,
 )
-from PySide6.QtCore import QMargins, Qt
+from PySide6.QtCore import QMargins, QTimer, Qt
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter
 from PySide6.QtWidgets import QToolTip
 
@@ -62,6 +62,10 @@ class TariffChartView(QChartView):
         self._series: QStackedBarSeries | None = None
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setStyleSheet("background: transparent; border: none;")
+        self._tooltip_text: str = ""
+        self._tooltip_timer = QTimer(self)
+        self._tooltip_timer.setInterval(200)
+        self._tooltip_timer.timeout.connect(self._refresh_tooltip)
         self.setMinimumHeight(380)
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
@@ -225,8 +229,14 @@ class TariffChartView(QChartView):
 
         painter.end()
 
+    def _refresh_tooltip(self) -> None:
+        if self._tooltip_text:
+            QToolTip.showText(QCursor.pos(), self._tooltip_text, self)
+
     def _on_bar_hovered(self, status: bool, index: int) -> None:
         if not status or index >= len(self._buckets):
+            self._tooltip_text = ""
+            self._tooltip_timer.stop()
             QToolTip.hideText()
             return
 
@@ -254,7 +264,10 @@ class TariffChartView(QChartView):
                 if rate_kwh:
                     lines.append(f"{rate_name}: {self._format_decimal(rate_kwh, 3)} kWh")
 
-        QToolTip.showText(QCursor.pos(), "\n".join(lines), self.viewport())
+        self._tooltip_text = "\n".join(lines)
+        QToolTip.showText(QCursor.pos(), self._tooltip_text, self)
+        if not self._tooltip_timer.isActive():
+            self._tooltip_timer.start()
 
     @staticmethod
     def _format_decimal(value: float, decimals: int) -> str:
