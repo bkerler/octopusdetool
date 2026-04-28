@@ -128,6 +128,8 @@ DEBUG_LOG_FILE_CONFIG_KEY = "debug_log_file"
 REFERENCE_READINGS_CONFIG_KEY = "reference_readings"
 SELECTED_REFERENCE_ID_CONFIG_KEY = "selected_reference_id"
 USE_LOCAL_TIME_CONFIG_KEY = "use_local_time"
+BILLING_MONTH_DISPLAY_CONFIG_KEY = "use_billing_month_for_display"
+BILLING_MONTH_START_DATE_CONFIG_KEY = "billing_month_start_date"
 OUTPUT_EXTENSIONS = {
     "excel": ".xlsx",
     "csv": ".csv",
@@ -826,6 +828,10 @@ class OctopusSmartMeterGUI:
         )
 
         self.reference_readings_container = QWidget(self.window)
+        self.reference_readings_container.setObjectName("referenceReadingsContainer")
+        self.reference_readings_container.setStyleSheet(
+            "QWidget#referenceReadingsContainer { background-color: transparent; border: none; }"
+        )
         container_layout = QVBoxLayout(self.reference_readings_container)
         container_layout.setContentsMargins(0, 0, 0, 0)
         container_layout.setSpacing(8)
@@ -863,6 +869,37 @@ class OctopusSmartMeterGUI:
         self.use_local_time_checkbox.setText("Lokalzeit anstatt UTC-Zeit verwenden")
         self.use_local_time_checkbox.setChecked(True)
         self.settings_form_layout.addRow(QLabel("Zeitdarstellung:"), self.use_local_time_checkbox)
+
+        self.billing_month_checkbox = StatusIndicatorCheckBox(self.window)
+        self.billing_month_checkbox.setObjectName("billingMonthDisplayCheckBox")
+        self.billing_month_checkbox.setText("Abrechnungsmonat verwenden")
+        self.billing_month_checkbox.setChecked(True)
+
+        self.billing_month_start_date_edit = QDateEdit(self.window)
+        self.billing_month_start_date_edit.setObjectName("billingMonthStartDateEdit")
+        self.billing_month_start_date_edit.setCalendarPopup(False)
+        self.billing_month_start_date_edit.setDisplayFormat("dd.MM")
+        self.billing_month_start_date_edit.setDate(self.from_date_edit.date())
+        self.billing_month_start_date_edit.setToolTip(
+            "Der Tag wird für Monatsansichten genutzt; Tag und Monat für Jahresansichten."
+        )
+
+        self.billing_month_container = QWidget(self.window)
+        self.billing_month_container.setObjectName("billingMonthContainer")
+        self.billing_month_container.setStyleSheet(
+            "QWidget#billingMonthContainer { background-color: transparent; border: none; }"
+        )
+        billing_layout = QHBoxLayout(self.billing_month_container)
+        billing_layout.setContentsMargins(0, 0, 0, 0)
+        billing_layout.setSpacing(12)
+        billing_layout.addWidget(self.billing_month_checkbox)
+        billing_layout.addWidget(self.billing_month_start_date_edit)
+        billing_layout.addStretch(1)
+
+        self.settings_form_layout.addRow(
+            QLabel("Abrechnungsmonat für Darstellung nutzen:"),
+            self.billing_month_container,
+        )
 
     def _setup_view_calendar_popup(self) -> None:
         self.view_calendar_popup = ViewCalendarPopup(self.window)
@@ -907,7 +944,7 @@ QDateEdit::drop-down {{
     border-bottom-right-radius: 10px;
 }}
 """
-        for date_edit in (self.from_date_edit, self.to_date_edit):
+        for date_edit in (self.from_date_edit, self.to_date_edit, self.billing_month_start_date_edit):
             date_edit.setStyleSheet(date_edit_stylesheet)
             date_edit.setMinimumWidth(146)
             editor = date_edit.lineEdit()
@@ -921,6 +958,30 @@ QDateEdit::drop-down {{
                 action.setToolTip("Kalender oeffnen")
                 action.triggered.connect(lambda checked=False, target=date_edit: self._open_range_calendar_popup(target))
                 editor.setProperty("calendar_icon_embedded", True)
+        self.billing_month_start_date_edit.setStyleSheet(
+            """
+QDateEdit {
+    background-color: transparent;
+    border: 1px solid #6f4df6;
+    border-radius: 10px;
+    padding: 8px 28px 8px 10px;
+    color: #f4eeff;
+}
+
+QDateEdit:disabled {
+    color: #a498cb;
+}
+
+QDateEdit::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 0px;
+    border: none;
+    background-color: transparent;
+}
+"""
+        )
+        self._update_billing_month_date_enabled()
 
     def _open_range_calendar_popup(self, date_edit: QDateEdit) -> None:
         self._active_range_date_edit = date_edit
@@ -1194,6 +1255,8 @@ QDateEdit::drop-down {{
         self.view_date_edit.setDate(QDate.currentDate())
         self.view_currency_checkbox.setChecked(False)
         self.config_path_line_edit.setText(str(get_app_config_folder()))
+        self.billing_month_start_date_edit.setDate(self.from_date_edit.date())
+        self._update_billing_month_date_enabled()
         self._configure_view_date_edit()
         self._refresh_reference_readings_table()
         self._refresh_analysis_view()
@@ -1216,6 +1279,8 @@ QDateEdit::drop-down {{
         self.add_reference_button.clicked.connect(self._add_custom_reference_reading)
         self.remove_reference_button.clicked.connect(self._remove_selected_custom_reference_reading)
         self.use_local_time_checkbox.toggled.connect(self._on_use_local_time_toggled)
+        self.billing_month_checkbox.toggled.connect(self._on_billing_month_setting_changed)
+        self.billing_month_start_date_edit.dateChanged.connect(self._on_billing_month_setting_changed)
         self.view_mode_combo.currentIndexChanged.connect(self._on_view_mode_changed)
         self.view_calendar_button.clicked.connect(self._open_view_calendar_popup)
         self.view_date_edit.dateChanged.connect(lambda _date: self._refresh_analysis_view())
@@ -1762,6 +1827,14 @@ QDateEdit::drop-down {{
         self._set_default_analysis_date(force=True)
         self._refresh_analysis_view()
         self.save_config(force=True)
+
+    def _update_billing_month_date_enabled(self) -> None:
+        enabled = self.billing_month_checkbox.isChecked()
+        self.billing_month_start_date_edit.setEnabled(enabled)
+
+    def _on_billing_month_setting_changed(self, _value=None) -> None:
+        self._update_billing_month_date_enabled()
+        self._refresh_analysis_view()
 
     def _normalize_reference_reading(self, reading: dict, *, fallback_id: str) -> dict:
         normalized = {
@@ -2773,11 +2846,37 @@ QDateEdit::drop-down {{
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
 
-    def _build_analysis_buckets(
+    def _clamped_date(self, year: int, month: int, day: int) -> date:
+        last_day = calendar.monthrange(year, month)[1]
+        return date(year, month, min(day, last_day))
+
+    def _add_months_to_year_month(self, year: int, month: int, offset: int) -> tuple[int, int]:
+        month_index = (year * 12) + (month - 1) + offset
+        return month_index // 12, (month_index % 12) + 1
+
+    def _billing_start_date_for_month(self, selected_date: date) -> date:
+        start_day = self.billing_month_start_date_edit.date().day()
+        return self._clamped_date(selected_date.year, selected_date.month, start_day)
+
+    def _billing_start_date_for_year(self, selected_date: date) -> date:
+        configured_date = self.billing_month_start_date_edit.date()
+        return self._clamped_date(selected_date.year, configured_date.month(), configured_date.day())
+
+    def _billing_period_end(self, start_date: date, months: int, start_day: int) -> date:
+        end_year, end_month = self._add_months_to_year_month(start_date.year, start_date.month, months)
+        next_start = self._clamped_date(end_year, end_month, start_day)
+        return next_start - timedelta(days=1)
+
+    def _billing_display_enabled(self) -> bool:
+        return self.billing_month_checkbox.isChecked()
+
+    def _build_analysis_period(
         self,
         mode: str,
         selected_date: date,
-    ) -> tuple[list[DisplayBucket], str, str, date, date]:
+    ) -> tuple[list[DisplayBucket], str, str, date, date, list[tuple[date, date]]]:
+        billing_enabled = self._billing_display_enabled()
+
         if mode == "day":
             start_date = selected_date
             end_date = selected_date
@@ -2788,12 +2887,14 @@ QDateEdit::drop-down {{
                 )
                 for hour in range(24)
             ]
+            bucket_ranges = [(selected_date, selected_date) for _hour in range(24)]
             title = self._format_period_label(selected_date)
             first_column_title = "Stunde"
         elif mode == "week":
             start_date = selected_date - timedelta(days=selected_date.weekday())
             end_date = start_date + timedelta(days=6)
             buckets = []
+            bucket_ranges = []
             for offset in range(7):
                 current_day = start_date + timedelta(days=offset)
                 buckets.append(
@@ -2802,6 +2903,7 @@ QDateEdit::drop-down {{
                         tooltip_label=f"{GERMAN_WEEKDAY_NAMES[offset]}, {current_day.strftime('%d.%m.%Y')}",
                     )
                 )
+                bucket_ranges.append((current_day, current_day))
             iso_year, iso_week, _ = start_date.isocalendar()
             title = (
                 f"Woche {iso_week}/{iso_year} "
@@ -2809,32 +2911,109 @@ QDateEdit::drop-down {{
             )
             first_column_title = "Tag"
         elif mode == "month":
-            start_date = date(selected_date.year, selected_date.month, 1)
-            days_in_month = calendar.monthrange(selected_date.year, selected_date.month)[1]
-            end_date = date(selected_date.year, selected_date.month, days_in_month)
-            buckets = []
-            for day_index in range(days_in_month):
-                current_day = start_date + timedelta(days=day_index)
-                buckets.append(
-                    DisplayBucket(
-                        axis_label=f"{current_day.day:02d}",
-                        tooltip_label=current_day.strftime("%d.%m.%Y"),
+            if billing_enabled:
+                start_date = self._billing_start_date_for_month(selected_date)
+                start_day = self.billing_month_start_date_edit.date().day()
+                end_date = self._billing_period_end(start_date, 1, start_day)
+                day_count = (end_date - start_date).days + 1
+                buckets = []
+                bucket_ranges = []
+                for day_index in range(day_count):
+                    current_day = start_date + timedelta(days=day_index)
+                    buckets.append(
+                        DisplayBucket(
+                            axis_label=current_day.strftime("%d.%m."),
+                            tooltip_label=current_day.strftime("%d.%m.%Y"),
+                        )
                     )
+                    bucket_ranges.append((current_day, current_day))
+                title = (
+                    f"Abrechnungsmonat {GERMAN_MONTH_NAMES[selected_date.month - 1]} {selected_date.year} "
+                    f"({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})"
                 )
-            title = f"{GERMAN_MONTH_NAMES[selected_date.month - 1]} {selected_date.year}"
+            else:
+                start_date = date(selected_date.year, selected_date.month, 1)
+                days_in_month = calendar.monthrange(selected_date.year, selected_date.month)[1]
+                end_date = date(selected_date.year, selected_date.month, days_in_month)
+                buckets = []
+                bucket_ranges = []
+                for day_index in range(days_in_month):
+                    current_day = start_date + timedelta(days=day_index)
+                    buckets.append(
+                        DisplayBucket(
+                            axis_label=f"{current_day.day:02d}",
+                            tooltip_label=current_day.strftime("%d.%m.%Y"),
+                        )
+                    )
+                    bucket_ranges.append((current_day, current_day))
+                title = f"{GERMAN_MONTH_NAMES[selected_date.month - 1]} {selected_date.year}"
             first_column_title = "Tag"
         else:
-            start_date = date(selected_date.year, 1, 1)
-            end_date = date(selected_date.year, 12, 31)
-            buckets = [
-                DisplayBucket(
-                    axis_label=GERMAN_MONTH_ABBR[month - 1],
-                    tooltip_label=f"{GERMAN_MONTH_NAMES[month - 1]} {selected_date.year}",
+            if billing_enabled:
+                start_date = self._billing_start_date_for_year(selected_date)
+                start_day = self.billing_month_start_date_edit.date().day()
+                end_date = self._billing_period_end(start_date, 12, start_day)
+                buckets = []
+                bucket_ranges = []
+                for month_offset in range(12):
+                    bucket_year, bucket_month = self._add_months_to_year_month(
+                        start_date.year,
+                        start_date.month,
+                        month_offset,
+                    )
+                    bucket_start = self._clamped_date(bucket_year, bucket_month, start_day)
+                    bucket_end = self._billing_period_end(bucket_start, 1, start_day)
+                    buckets.append(
+                        DisplayBucket(
+                            axis_label=f"{GERMAN_MONTH_ABBR[bucket_month - 1]} {str(bucket_year)[2:]}",
+                            tooltip_label=(
+                                f"{GERMAN_MONTH_NAMES[bucket_month - 1]} "
+                                f"({bucket_start.strftime('%d.%m.%Y')} - {bucket_end.strftime('%d.%m.%Y')})"
+                            ),
+                        )
+                    )
+                    bucket_ranges.append((bucket_start, bucket_end))
+                title = (
+                    f"Abrechnungsjahr {selected_date.year} "
+                    f"({start_date.strftime('%d.%m.%Y')} - {end_date.strftime('%d.%m.%Y')})"
                 )
-                for month in range(1, 13)
-            ]
-            title = str(selected_date.year)
+            else:
+                start_date = date(selected_date.year, 1, 1)
+                end_date = date(selected_date.year, 12, 31)
+                buckets = [
+                    DisplayBucket(
+                        axis_label=GERMAN_MONTH_ABBR[month - 1],
+                        tooltip_label=f"{GERMAN_MONTH_NAMES[month - 1]} {selected_date.year}",
+                    )
+                    for month in range(1, 13)
+                ]
+                bucket_ranges = [
+                    (
+                        date(selected_date.year, month, 1),
+                        date(selected_date.year, month, calendar.monthrange(selected_date.year, month)[1]),
+                    )
+                    for month in range(1, 13)
+                ]
+                title = str(selected_date.year)
             first_column_title = "Monat"
+
+        return buckets, title, first_column_title, start_date, end_date, bucket_ranges
+
+    def _bucket_index_for_date(self, value: date, bucket_ranges: list[tuple[date, date]]) -> int | None:
+        for index, (bucket_start, bucket_end) in enumerate(bucket_ranges):
+            if bucket_start <= value <= bucket_end:
+                return index
+        return None
+
+    def _build_analysis_buckets(
+        self,
+        mode: str,
+        selected_date: date,
+    ) -> tuple[list[DisplayBucket], str, str, date, date, list[tuple[date, date]]]:
+        buckets, title, first_column_title, start_date, end_date, bucket_ranges = self._build_analysis_period(
+            mode,
+            selected_date,
+        )
 
         start_dt = datetime(start_date.year, start_date.month, start_date.day)
         end_dt = datetime(end_date.year, end_date.month, end_date.day) + timedelta(days=1)
@@ -2846,12 +3025,14 @@ QDateEdit::drop-down {{
 
             if mode == "day":
                 index = reading_display_start.hour
-            elif mode in {"week", "month"}:
+            elif mode == "week":
                 index = (reading_display_start.date() - start_date).days
+            elif mode == "month":
+                index = self._bucket_index_for_date(reading_display_start.date(), bucket_ranges)
             else:
-                index = reading_display_start.month - 1
+                index = self._bucket_index_for_date(reading_display_start.date(), bucket_ranges)
 
-            if not 0 <= index < len(buckets):
+            if index is None or not 0 <= index < len(buckets):
                 continue
 
             rate_name = self._get_rate_name_for_reading(reading["start"], self.current_tariff_type)
@@ -2865,7 +3046,7 @@ QDateEdit::drop-down {{
                 buckets[index].generation_kwh += abs(net_value)
             buckets[index].meter_reading_kwh = float(reading["meter_reading_kwh"])
 
-        return buckets, title, first_column_title, start_date, end_date
+        return buckets, title, first_column_title, start_date, end_date, bucket_ranges
 
     def _populate_analysis_table(
         self,
@@ -2874,6 +3055,7 @@ QDateEdit::drop-down {{
         *,
         mode: str,
         selected_date: date,
+        bucket_ranges: list[tuple[date, date]],
         show_currency: bool,
         tariff_type: str,
     ) -> None:
@@ -2929,29 +3111,24 @@ QDateEdit::drop-down {{
             self.analysis_table_model.setHorizontalHeaderLabels(headers)
 
             bucket_end_values: list[float] = [0.0] * len(buckets)
-            if mode == "week":
-                start_date = selected_date - timedelta(days=selected_date.weekday())
-            elif mode == "month":
-                start_date = date(selected_date.year, selected_date.month, 1)
-            else:
-                start_date = date(selected_date.year, 1, 1)
 
             for reading in build_readings_with_meter_reading(self.existing_data):
                 reading_start = self._display_datetime(reading["start"])
 
                 if mode == "week":
+                    start_date = selected_date - timedelta(days=selected_date.weekday())
                     end_date = start_date + timedelta(days=6)
                     if reading_start.date() < start_date or reading_start.date() > end_date:
                         continue
                     bucket_index = (reading_start.date() - start_date).days
                 elif mode == "month":
-                    if reading_start.year != selected_date.year or reading_start.month != selected_date.month:
+                    bucket_index = self._bucket_index_for_date(reading_start.date(), bucket_ranges)
+                    if bucket_index is None:
                         continue
-                    bucket_index = reading_start.day - 1
                 else:
-                    if reading_start.year != selected_date.year:
+                    bucket_index = self._bucket_index_for_date(reading_start.date(), bucket_ranges)
+                    if bucket_index is None:
                         continue
-                    bucket_index = reading_start.month - 1
 
                 if 0 <= bucket_index < len(bucket_end_values):
                     bucket_end_values[bucket_index] = float(reading["meter_reading_kwh"])
@@ -3041,7 +3218,7 @@ QDateEdit::drop-down {{
         selected_date = self._qdate_to_date(self.view_date_edit.date())
         mode = self._current_view_mode()
         show_currency = self.view_currency_checkbox.isChecked()
-        buckets, title, first_column_title, start_date, end_date = self._build_analysis_buckets(
+        buckets, title, first_column_title, start_date, end_date, bucket_ranges = self._build_analysis_buckets(
             mode,
             selected_date,
         )
@@ -3100,6 +3277,7 @@ QDateEdit::drop-down {{
             first_column_title,
             mode=mode,
             selected_date=selected_date,
+            bucket_ranges=bucket_ranges,
             show_currency=show_currency,
             tariff_type=tariff_type,
         )
@@ -3130,6 +3308,7 @@ QDateEdit::drop-down {{
             self.debug_checkbox.setChecked(bool(config.get("debug", False)))
             self.auto_output_checkbox.setChecked(bool(config.get(AUTO_OUTPUT_FLAG, False)))
             self.use_local_time_checkbox.setChecked(bool(config.get(USE_LOCAL_TIME_CONFIG_KEY, True)))
+            self.billing_month_checkbox.setChecked(bool(config.get(BILLING_MONTH_DISPLAY_CONFIG_KEY, True)))
             self.accounts = self._deserialize_accounts(config.get(ACCOUNTS_CONFIG_KEY, []))
             self.selected_account_number = config.get(SELECTED_ACCOUNT_NUMBER_CONFIG_KEY)
             self._refresh_account_combo()
@@ -3169,6 +3348,12 @@ QDateEdit::drop-down {{
                 self.output_file_line_edit.setText(str(self._get_default_output_path(saved_format)))
 
             self._set_date_from_string(self.from_date_edit, config.get("from_date", "01.01.2024"), QDate(2024, 1, 1))
+            self._set_date_from_string(
+                self.billing_month_start_date_edit,
+                config.get(BILLING_MONTH_START_DATE_CONFIG_KEY, self._date_to_string(self.from_date_edit)),
+                self.from_date_edit.date(),
+            )
+            self._update_billing_month_date_enabled()
             self.to_date_edit.setDate(QDate.currentDate())
             self._has_saved_base_price = "monthly_base_price_eur" in config
             self._set_tariff_inputs(
@@ -3314,6 +3499,8 @@ QDateEdit::drop-down {{
             REFERENCE_READINGS_CONFIG_KEY: self._serialize_reference_readings(),
             SELECTED_REFERENCE_ID_CONFIG_KEY: self.selected_reference_id,
             USE_LOCAL_TIME_CONFIG_KEY: self.use_local_time_checkbox.isChecked(),
+            BILLING_MONTH_DISPLAY_CONFIG_KEY: self.billing_month_checkbox.isChecked(),
+            BILLING_MONTH_START_DATE_CONFIG_KEY: self._date_to_string(self.billing_month_start_date_edit),
         }
         email_value = self.email_line_edit.text()
         password_value = self.password_line_edit.text()
