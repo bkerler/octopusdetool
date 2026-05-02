@@ -17,6 +17,7 @@ import shutil
 import sys
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from copy import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -57,6 +58,7 @@ DISPLAY_NAME_DYNAMIC_OCTOPUS = "dynamicoctopus"
 REQUEST_TIMEOUT_SECONDS = 30
 REQUEST_TIMEOUT_RETRIES = 2
 REQUEST_TIMEOUT_RETRY_DELAY_SECONDS = 2
+TRUDI_CONSUMPTION_OBIS_CODES = {"0100010800FF", "1-0:1.8.0", "1.8.0"}
 
 
 class _WindowsGuid(ctypes.Structure):
@@ -1846,6 +1848,96 @@ def parse_date(date_str: str) -> datetime:
 def parse_datetime(datetime_str: str) -> datetime:
     """Parse datetime string in European format (DD.MM.YYYY HH:MM:SS)."""
     return datetime.strptime(datetime_str, "%d.%m.%Y %H:%M:%S")
+
+
+def _xml_child_text(element: ET.Element, local_name: str) -> str | None:
+    for child in element:
+        if child.tag.rsplit("}", 1)[-1] == local_name:
+            return child.text.strip() if child.text else ""
+    return None
+
+
+def _xml_first_descendant_text(element: ET.Element, local_name: str) -> str | None:
+    for descendant in element.iter():
+        if descendant.tag.rsplit("}", 1)[-1] == local_name:
+            return descendant.text.strip() if descendant.text else ""
+    return None
+
+
+def _parse_trudi_datetime(raw_value: str) -> datetime:
+    text = raw_value.strip()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    return normalize_datetime(datetime.fromisoformat(text))
+
+
+def parse_trudi_export_readings(
+    xml_path: Path | str,
+    *,
+    obis_codes: set[str] | None = None,
+) -> list[dict]:
+    """Parse cumulative meter readings from a TruDi export XML file."""
+    target_obis_codes = {code.upper() for code in (obis_codes or TRUDI_CONSUMPTION_OBIS_CODES)}
+    root = ET.parse(xml_path).getroot()
+    readings: list[dict] = []
+
+    for meter_reading in root.iter():
+        if meter_reading.tag.rsplit("}", 1)[-1] != "MeterReading":
+            continue
+
+        reading_type = next(
+            (
+                child
+                for child in meter_reading
+                if child.tag.rsplit("}", 1)[-1] == "ReadingType"
+            ),
+            None,
+        )
+        if reading_type is None:
+            continue
+
+        obis_code = (_xml_child_text(reading_type, "obisCode") or "").upper()
+        if obis_code not in target_obis_codes:
+            continue
+
+        scaler_text = _xml_child_text(reading_type, "scaler") or "0"
+        power_text = _xml_child_text(reading_type, "powerOfTenMultiplier") or "0"
+        try:
+            scaler = int(scaler_text)
+            power_of_ten = int(power_text)
+        except ValueError:
+            scaler = 0
+            power_of_ten = 0
+
+        # ESPI uom 72 is Wh. Convert the scaled raw value to kWh.
+        multiplier = (10 ** (scaler + power_of_ten)) / 1000
+
+        for interval_reading in meter_reading.iter():
+            if interval_reading.tag.rsplit("}", 1)[-1] != "IntervalReading":
+                continue
+            raw_value = _xml_first_descendant_text(interval_reading, "value")
+            raw_time = (
+                _xml_child_text(interval_reading, "targetTime")
+                or _xml_first_descendant_text(interval_reading, "start")
+            )
+            if raw_value is None or raw_time is None:
+                continue
+            try:
+                readings.append(
+                    {
+                        "read_at": _parse_trudi_datetime(raw_time),
+                        "value": round(float(raw_value) * multiplier, 4),
+                        "obis_code": obis_code,
+                    }
+                )
+            except ValueError:
+                continue
+
+    readings.sort(key=lambda item: item["read_at"])
+    deduplicated: dict[datetime, dict] = {}
+    for reading in readings:
+        deduplicated[reading["read_at"]] = reading
+    return list(deduplicated.values())
 
 
 def _reading_sort_value(raw_value) -> datetime:

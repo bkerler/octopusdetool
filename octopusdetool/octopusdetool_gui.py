@@ -87,6 +87,7 @@ from octopusdetool.octopusdetool import (
     fill_excel_template,
     format_datetime,
     get_default_excel_path,
+    get_account_cache_dir,
     get_default_consumption_csv_path,
     get_default_tariff_settings_for_type,
     get_demo_tariff_profile,
@@ -98,6 +99,7 @@ from octopusdetool.octopusdetool import (
     load_existing_consumption_data,
     merge_readings,
     normalize_datetime,
+    parse_trudi_export_readings,
     readings_changed,
     consumption_csv_has_api_format,
     save_to_json,
@@ -610,6 +612,9 @@ class OctopusSmartMeterGUI:
         self.latest_timestamp: datetime | None = None
         self.reference_readings: list[dict] = []
         self.selected_reference_id: str | None = None
+        self.trudi_readings: list[dict] = []
+        self.trudi_readings_by_time: dict[datetime, float] = {}
+        self.trudi_source_path: Path | None = None
         self.accounts: list[dict] = []
         self.selected_account_number: str | None = None
         self._reference_table_updating = False
@@ -634,6 +639,11 @@ class OctopusSmartMeterGUI:
         self.load_config()
         if self._debug_enabled_from_cli:
             self.debug_checkbox.setChecked(True)
+        try:
+            self._read_trudi_cache()
+        except Exception as exc:
+            self._set_trudi_readings([], None)
+            print(f"[DEBUG] trudi.yaml konnte nicht geladen werden: {exc}")
         self.check_existing_data()
 
     def _load_ui(self) -> QWidget:
@@ -854,8 +864,10 @@ class OctopusSmartMeterGUI:
         button_row.setContentsMargins(0, 0, 0, 0)
         self.add_reference_button = QPushButton("Benutzerwert hinzufuegen", self.reference_readings_container)
         self.remove_reference_button = QPushButton("Benutzerwert loeschen", self.reference_readings_container)
+        self.import_trudi_button = QPushButton("TruDi XML importieren", self.reference_readings_container)
         button_row.addWidget(self.add_reference_button)
         button_row.addWidget(self.remove_reference_button)
+        button_row.addWidget(self.import_trudi_button)
         button_row.addStretch(1)
         container_layout.addLayout(button_row)
 
@@ -1053,6 +1065,7 @@ QDateEdit::drop-down {
             self.export_existing_button,
             self.add_reference_button,
             self.remove_reference_button,
+            self.import_trudi_button,
         ):
             button.setStyleSheet(primary_button_stylesheet)
 
@@ -1278,6 +1291,7 @@ QDateEdit::drop-down {
         self.save_settings_button.clicked.connect(self._save_settings_from_tab)
         self.add_reference_button.clicked.connect(self._add_custom_reference_reading)
         self.remove_reference_button.clicked.connect(self._remove_selected_custom_reference_reading)
+        self.import_trudi_button.clicked.connect(self.import_trudi_export)
         self.use_local_time_checkbox.toggled.connect(self._on_use_local_time_toggled)
         self.billing_month_checkbox.toggled.connect(self._on_billing_month_setting_changed)
         self.billing_month_start_date_edit.dateChanged.connect(self._on_billing_month_setting_changed)
@@ -1723,6 +1737,11 @@ QDateEdit::drop-down {
         selected_number = self.account_combo.currentData()
         self.selected_account_number = str(selected_number) if selected_number else None
         self._refresh_account_cache_paths()
+        try:
+            self._read_trudi_cache()
+        except Exception as exc:
+            self._set_trudi_readings([], None)
+            print(f"[DEBUG] trudi.yaml konnte nicht geladen werden: {exc}")
         self.check_existing_data()
         self.save_config(force=True)
 
@@ -2099,6 +2118,109 @@ QDateEdit::drop-down {
             self._rebuild_existing_data_with_selected_reference(persist_cache=True)
         self._refresh_reference_readings_table()
         self.save_config(force=True)
+
+    def _set_trudi_readings(self, readings: list[dict], path: Path | None = None) -> None:
+        self.trudi_readings = readings
+        self.trudi_readings_by_time = {
+            normalize_datetime(reading["read_at"]): float(reading["value"])
+            for reading in readings
+        }
+        self.trudi_source_path = path
+
+    def _load_trudi_export_path(self, path: Path) -> None:
+        readings = parse_trudi_export_readings(path)
+        if not readings:
+            raise ValueError("Die TruDi-Datei enthaelt keine importierbaren Zaehlerstaende fuer OBIS 1.8.0.")
+        self._set_trudi_readings(readings, path)
+
+    def _get_trudi_cache_path(self) -> Path:
+        account_number = None if self._demo_mode else self.selected_account_number
+        return get_account_cache_dir(account_number) / "trudi.yaml"
+
+    def _write_trudi_cache(self) -> None:
+        cache_path = self._get_trudi_cache_path()
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "source_file": str(self.trudi_source_path) if self.trudi_source_path else "",
+            "total_readings": len(self.trudi_readings),
+            "readings": [
+                {
+                    "read_at": normalize_datetime(reading["read_at"]).isoformat(),
+                    "value": float(reading["value"]),
+                    "obis_code": reading.get("obis_code", ""),
+                }
+                for reading in self.trudi_readings
+            ],
+        }
+        cache_path.write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+    def _read_trudi_cache(self) -> None:
+        cache_path = self._get_trudi_cache_path()
+        if not cache_path.exists():
+            self._set_trudi_readings([], None)
+            return
+
+        payload = yaml.safe_load(cache_path.read_text(encoding="utf-8")) or {}
+        raw_readings = payload.get("readings", []) if isinstance(payload, dict) else []
+        readings: list[dict] = []
+        for raw_reading in raw_readings:
+            if not isinstance(raw_reading, dict):
+                continue
+            try:
+                readings.append(
+                    {
+                        "read_at": normalize_datetime(datetime.fromisoformat(str(raw_reading["read_at"]))),
+                        "value": float(raw_reading["value"]),
+                        "obis_code": str(raw_reading.get("obis_code", "")),
+                    }
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+        source_file = payload.get("source_file") if isinstance(payload, dict) else None
+        self._set_trudi_readings(
+            sorted(readings, key=lambda item: item["read_at"]),
+            Path(source_file).expanduser() if source_file else None,
+        )
+
+    def import_trudi_export(self) -> None:
+        default_path = self.trudi_source_path or Path.home()
+        filename, _ = QFileDialog.getOpenFileName(
+            self.window,
+            "TruDi Smartmeter Export importieren",
+            str(default_path),
+            "XML-Dateien (*.xml);;Alle Dateien (*)",
+        )
+        if not filename:
+            return
+
+        try:
+            self._load_trudi_export_path(Path(filename).expanduser())
+        except Exception as exc:
+            self._show_error(f"TruDi XML konnte nicht importiert werden: {exc}")
+            return
+
+        self._write_trudi_cache()
+        self._refresh_analysis_view()
+        self._show_info(f"{len(self.trudi_readings)} Einträge aus dem TruDi-Export importiert")
+        self._set_status(
+            f"TruDi XML importiert: {len(self.trudi_readings)} Zaehlerstaende in {self._get_trudi_cache_path()}"
+        )
+
+    def _trudi_value_for_timestamp(self, raw_timestamp: datetime) -> float | None:
+        return self.trudi_readings_by_time.get(normalize_datetime(raw_timestamp))
+
+    def _format_trudi_value(self, value: float | None) -> str:
+        if value is None:
+            return ""
+        return f"{self._format_decimal(value, 3)} kWh"
+
+    def _format_trudi_delta(self, octopus_value: float, trudi_value: float | None) -> str:
+        if trudi_value is None:
+            return ""
+        return f"{self._format_decimal(octopus_value - trudi_value, 3)} kWh"
 
     def _get_extension_for_format(self, format_type: str) -> str:
         return OUTPUT_EXTENSIONS.get(format_type, ".csv")
@@ -3060,10 +3182,18 @@ QDateEdit::drop-down {
         tariff_type: str,
     ) -> None:
         self.analysis_table_model.clear()
+        has_trudi_readings = bool(self.trudi_readings_by_time)
         if mode == "day":
-            self.analysis_table_model.setHorizontalHeaderLabels(
-                ["Tag mit Datum + Stunde", "Zaehlerstand", "Verbrauch", "Tarif"]
-            )
+            headers = ["Tag mit Datum + Stunde", "Zaehlerstand"]
+            if has_trudi_readings:
+                headers = [
+                    "Tag mit Datum + Stunde",
+                    "Octopus-Zaehlerstand",
+                    "TruDi-Zaehlerstand",
+                    "Differenz",
+                ]
+            headers.extend(["Verbrauch", "Tarif"])
+            self.analysis_table_model.setHorizontalHeaderLabels(headers)
 
             start_dt = datetime(selected_date.year, selected_date.month, selected_date.day)
             end_dt = start_dt + timedelta(days=1)
@@ -3081,17 +3211,30 @@ QDateEdit::drop-down {
                     f"{reading_start.strftime('%d.%m.%Y %H:00')}"
                 )
                 consumption_text = f"{self._format_decimal(abs(net_value), 3)} kWh"
-                meter_text = f"{self._format_decimal(float(reading['meter_reading_kwh']), 3)} kWh"
+                octopus_meter_value = float(reading["meter_reading_kwh"])
+                meter_text = f"{self._format_decimal(octopus_meter_value, 3)} kWh"
+                trudi_value = self._trudi_value_for_timestamp(reading["end"])
                 tariff_name = self._get_rate_name_for_reading(reading["start"], tariff_type)
                 direction_text = "Einspeisung" if net_value < 0 else "Verbrauch"
 
                 row_items = [
                     QStandardItem(timestamp_label),
                     QStandardItem(meter_text),
-                    QStandardItem(f"{direction_text}: {consumption_text}"),
-                    QStandardItem(tariff_name),
                 ]
-                for item in row_items[1:3]:
+                if has_trudi_readings:
+                    row_items.extend(
+                        [
+                            QStandardItem(self._format_trudi_value(trudi_value)),
+                            QStandardItem(self._format_trudi_delta(octopus_meter_value, trudi_value)),
+                        ]
+                    )
+                row_items.extend(
+                    [
+                        QStandardItem(f"{direction_text}: {consumption_text}"),
+                        QStandardItem(tariff_name),
+                    ]
+                )
+                for item in row_items[1:-1]:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
                 self.analysis_table_model.appendRow(row_items)
@@ -3106,11 +3249,20 @@ QDateEdit::drop-down {
             unit_title = "EUR" if show_currency else "kWh"
             rate_order = self._get_analysis_rate_order(tariff_type)
             rate_prices = self._get_analysis_rate_prices(tariff_type)
-            headers = [first_column_title, "Zaehlerstand", *rate_order]
+            headers = [first_column_title, "Zaehlerstand"]
+            if has_trudi_readings:
+                headers = [
+                    first_column_title,
+                    "Octopus-Zaehlerstand",
+                    "TruDi-Zaehlerstand",
+                    "Differenz",
+                ]
+            headers.extend(rate_order)
             headers.append(f"Gesamt ({unit_title})")
             self.analysis_table_model.setHorizontalHeaderLabels(headers)
 
             bucket_end_values: list[float] = [0.0] * len(buckets)
+            bucket_trudi_values: list[float | None] = [None] * len(buckets) if has_trudi_readings else []
 
             for reading in build_readings_with_meter_reading(self.existing_data):
                 reading_start = self._display_datetime(reading["start"])
@@ -3132,9 +3284,13 @@ QDateEdit::drop-down {
 
                 if 0 <= bucket_index < len(bucket_end_values):
                     bucket_end_values[bucket_index] = float(reading["meter_reading_kwh"])
+                    if has_trudi_readings:
+                        bucket_trudi_values[bucket_index] = self._trudi_value_for_timestamp(reading["end"])
 
             for index, bucket in enumerate(buckets):
-                meter_text = f"{self._format_decimal(bucket_end_values[index], 3)} kWh"
+                octopus_meter_value = bucket_end_values[index]
+                trudi_value = bucket_trudi_values[index] if has_trudi_readings else None
+                meter_text = f"{self._format_decimal(octopus_meter_value, 3)} kWh"
                 if show_currency:
                     rate_values = [
                         f"{self._format_decimal(bucket.rate_cost_eur(rate_name, rate_prices.get(rate_name, 0.0)), 2)} EUR"
@@ -3154,7 +3310,17 @@ QDateEdit::drop-down {
                             f"Einspeisung {self._format_decimal(bucket.total_generation_kwh, 3)} kWh)"
                         )
 
-                row_items = [QStandardItem(bucket.tooltip_label), QStandardItem(meter_text)]
+                row_items = [
+                    QStandardItem(bucket.tooltip_label),
+                    QStandardItem(meter_text),
+                ]
+                if has_trudi_readings:
+                    row_items.extend(
+                        [
+                            QStandardItem(self._format_trudi_value(trudi_value)),
+                            QStandardItem(self._format_trudi_delta(octopus_meter_value, trudi_value)),
+                        ]
+                    )
                 row_items.extend(QStandardItem(value) for value in rate_values)
                 row_items.append(QStandardItem(total_value))
 
