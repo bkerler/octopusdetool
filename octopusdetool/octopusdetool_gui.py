@@ -128,6 +128,8 @@ TARIFF_RATES_CONFIG_KEY = "tariff_rates"
 EXCEL_EXPORT_SUPPORTED_CONFIG_KEY = "excel_export_supported"
 EXCEL_EXPORT_REASON_CONFIG_KEY = "excel_export_reason"
 DEBUG_LOG_FILE_CONFIG_KEY = "debug_log_file"
+# ponytail: five fallback days per run; rerun to finish large backfills safely.
+MAX_FALLBACK_DAYS_PER_RUN = 5
 REFERENCE_READINGS_CONFIG_KEY = "reference_readings"
 SELECTED_REFERENCE_ID_CONFIG_KEY = "selected_reference_id"
 USE_LOCAL_TIME_CONFIG_KEY = "use_local_time"
@@ -1798,22 +1800,41 @@ QDateEdit::drop-down {
                 self._fit_window_to_content()
 
     def _wait_for_rate_limit_retry(self, delay: int, attempt: int, total_attempts: int) -> None:
+        if attempt == 0:
+            message = f"API-Limit: naechster Abruf in {delay}s..."
+        else:
+            message = (
+                f"Zu viele Anfragen, neuer Versuch in {delay}s "
+                f"({attempt}/{total_attempts})..."
+            )
         self._set_status(
-            f"Zu viele Anfragen, neuer Versuch in {delay}s ({attempt}/{total_attempts})...",
+            message,
             update=True,
         )
         event_loop = QEventLoop(self.window)
         timer = QTimer(event_loop)
         timer.setSingleShot(True)
         timer.timeout.connect(event_loop.quit)
-        timer.start(delay * 1000)
-        event_loop.exec()
+        remaining = max(0, int(delay))
+        while remaining:
+            wait_seconds = min(remaining, 2_000_000)
+            timer.start(wait_seconds * 1000)
+            event_loop.exec()
+            remaining -= wait_seconds
+        self._set_status("API-Limit: Wartezeit beendet, Datenabruf laeuft...", update=True)
 
     def _raise_client_error(self, client, action: str, fallback_message: str) -> None:
         if client.last_error_kind == "rate_limit":
+            delay = getattr(client, "last_rate_limit_delay", None)
+            if delay:
+                raise Exception(
+                    f"Zu viele Anfragen {action}. "
+                    f"Die API meldet eine Sperrzeit von etwa {delay} Sekunden. "
+                    "Bitte spaeter erneut versuchen."
+                )
             raise Exception(
                 f"Zu viele Anfragen {action}. "
-                "Bitte mindestens eine Minute warten und es dann erneut versuchen."
+                "Das API-Limit ist dynamisch. Bitte spaeter erneut versuchen."
             )
         if client.last_error_kind == "graphql":
             raise Exception(
@@ -4159,6 +4180,8 @@ QDateEdit::drop-down {
                         )
 
                     new_readings = []
+                    retrieved_through: datetime | None = None
+                    remaining_incomplete_days = 0
                     client = None
                     account_number = None
                     property_id = None
@@ -4272,6 +4295,15 @@ QDateEdit::drop-down {
                             fetch_all=True,
                             progress_callback=update_progress,
                         )
+                        if new_readings:
+                            retrieved_through = max(
+                                normalize_datetime(reading["end"]) for reading in new_readings
+                            )
+                            self._set_status(
+                                "Daten abgerufen bis "
+                                f"{self._display_datetime(retrieved_through):%d.%m.%Y %H:%M:%S}",
+                                update=True,
+                            )
 
                         if client.last_error_kind in {
                             "network",
@@ -4333,12 +4365,15 @@ QDateEdit::drop-down {
                                 raise Exception("Zaehlerdaten konnten fuer fehlende Tage nicht geladen werden.")
                             malo_number, _meter_id, property_id = meter_info
 
+                        days_to_fetch = incomplete_days[-MAX_FALLBACK_DAYS_PER_RUN:]
+                        remaining_incomplete_days = len(incomplete_days) - len(days_to_fetch)
                         self._set_status(
-                            f"Ergaenze {len(incomplete_days)} unvollstaendige Tage ueber GetSmartUsage...",
+                            f"Ergaenze {len(days_to_fetch)} von {len(incomplete_days)} "
+                            "unvollstaendigen Tagen ueber GetSmartUsage...",
                             update=True,
                         )
                         fallback_readings: list[dict] = []
-                        for missing_day in incomplete_days:
+                        for missing_day in days_to_fetch:
                             for reading_direction in ("CONSUMPTION", "GENERATION"):
                                 day_readings = client.get_smart_usage(
                                     property_id=property_id,
@@ -4359,6 +4394,20 @@ QDateEdit::drop-down {
                                         "Verbrauchsdaten konnten nicht geladen werden.",
                                     )
                                 fallback_readings.extend(day_readings)
+                                if day_readings:
+                                    day_retrieved_through = max(
+                                        normalize_datetime(reading["end"])
+                                        for reading in day_readings
+                                    )
+                                    retrieved_through = max(
+                                        retrieved_through or day_retrieved_through,
+                                        day_retrieved_through,
+                                    )
+                                    self._set_status(
+                                        "Daten abgerufen bis "
+                                        f"{self._display_datetime(retrieved_through):%d.%m.%Y %H:%M:%S}",
+                                        update=True,
+                                    )
                         if fallback_readings:
                             all_readings.extend(fallback_readings)
 
@@ -4405,8 +4454,19 @@ QDateEdit::drop-down {
 
                     self._set_default_analysis_date(force=True)
                     self._refresh_analysis_view()
+                    last_retrieved = (
+                        f"; letzter Abruf: {self._display_datetime(retrieved_through):%d.%m.%Y %H:%M:%S}"
+                        if retrieved_through
+                        else ""
+                    )
+                    remaining = (
+                        f"; noch {remaining_incomplete_days} unvollstaendige Tage offen"
+                        if remaining_incomplete_days
+                        else ""
+                    )
                     self._set_status(
                         f"Fertig! Daten gespeichert ({len(self.existing_data)} Eintraege)"
+                        f"{last_retrieved}{remaining}"
                     )
                 except Exception:
                     if self.debug_checkbox.isChecked():

@@ -58,8 +58,13 @@ DISPLAY_NAME_DYNAMIC_OCTOPUS = "dynamicoctopus"
 REQUEST_TIMEOUT_SECONDS = 30
 REQUEST_TIMEOUT_RETRIES = 2
 REQUEST_TIMEOUT_RETRY_DELAY_SECONDS = 2
-GRAPHQL_RATE_LIMIT_RETRIES = 3
-GRAPHQL_RATE_LIMIT_RETRY_DELAY_SECONDS = 5
+GRAPHQL_RATE_LIMIT_RETRIES = 1
+GRAPHQL_RATE_LIMIT_RETRY_DELAY_SECONDS = 60
+GRAPHQL_PAGE_SIZE = 99
+# Used only when rateLimitInfo does not expose a measurement-specific rate.
+GRAPHQL_MEASUREMENT_FALLBACK_INTERVAL_SECONDS = 0.2
+GRAPHQL_RATE_LIMIT_INFO_CACHE_SECONDS = 60.0
+GRAPHQL_RATE_LIMIT_TTL_SAFETY_SECONDS = 2
 # Ask for the meter's native interval. This avoids market-specific aggregation
 # limits; the current German smart-meter feed returns 15-minute records.
 READING_FREQUENCY_TYPE = "RAW_INTERVAL"
@@ -1060,6 +1065,8 @@ query getAccountMeasurements(
 SMART_USAGE_QUERY = """
 query GetSmartUsage(
     $propertyId: ID!
+    $first: Int!
+    $after: String
     $timezone: String!
     $startAt: DateTime!
     $endAt: DateTime!
@@ -1067,7 +1074,8 @@ query GetSmartUsage(
 ) {
     property(id: $propertyId) {
         measurements(
-            first: 1000
+            first: $first
+            after: $after
             timezone: $timezone
             startAt: $startAt
             endAt: $endAt
@@ -1102,6 +1110,31 @@ query GetSmartUsage(
                             }
                         }
                     }
+                }
+            }
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+        }
+    }
+}
+"""
+
+RATE_LIMIT_INFO_QUERY = """
+query RateLimitInfo {
+    rateLimitInfo {
+        pointsAllowanceRateLimit {
+            isBlocked
+            ttl
+        }
+        fieldSpecificRateLimits(first: 99) {
+            edges {
+                node {
+                    field
+                    isBlocked
+                    rate
+                    ttl
                 }
             }
         }
@@ -1177,7 +1210,11 @@ class OctopusGermanyClient:
         self.debug = debug
         self.last_error_kind: str | None = None
         self.last_error_message: str | None = None
+        self.last_rate_limit_delay: int | None = None
         self.rate_limit_callback = None
+        self._measurement_request_interval = None
+        self._next_measurement_request_at = 0.0
+        self._rate_limit_info_checked_at = 0.0
 
     def _log_debug(self, message: str):
         """Print debug message if debug mode is enabled."""
@@ -1298,6 +1335,8 @@ class OctopusGermanyClient:
         """Make an authenticated GraphQL request."""
         if not self.token:
             raise RuntimeError("Not authenticated. Call authenticate() first.")
+
+        self.last_rate_limit_delay = None
         
         headers = {"Authorization": f"JWT {self.token}"}
         payload = {"query": query, "variables": variables}
@@ -1313,6 +1352,8 @@ class OctopusGermanyClient:
         
         for rate_limit_attempt in range(GRAPHQL_RATE_LIMIT_RETRIES + 1):
             try:
+                if query in {MEASUREMENTS_QUERY, SMART_USAGE_QUERY}:
+                    self._wait_for_measurement_request(headers)
                 response = self._post_with_retry(
                     json_payload=payload,
                     headers=headers,
@@ -1342,7 +1383,8 @@ class OctopusGermanyClient:
                         if isinstance(error, dict)
                     )
                     if rate_limited and rate_limit_attempt < GRAPHQL_RATE_LIMIT_RETRIES:
-                        delay = GRAPHQL_RATE_LIMIT_RETRY_DELAY_SECONDS * (2 ** rate_limit_attempt)
+                        delay = self._get_rate_limit_delay(headers)
+                        self.last_rate_limit_delay = delay
                         message = (
                             f"Zu viele Anfragen, neuer Versuch in {delay}s "
                             f"({rate_limit_attempt + 1}/{GRAPHQL_RATE_LIMIT_RETRIES})..."
@@ -1375,6 +1417,117 @@ class OctopusGermanyClient:
                 self._set_last_error("network", error_message)
                 print(error_message)
                 return {}
+
+    def _get_rate_limit_delay(self, headers: dict) -> int:
+        """Return the current API-provided delay before retrying a blocked request."""
+        fallback = GRAPHQL_RATE_LIMIT_RETRY_DELAY_SECONDS
+        info = self._get_rate_limit_info(headers)
+        if not info:
+            return fallback
+
+        delays = []
+        points_limit = info.get("pointsAllowanceRateLimit") or {}
+        if points_limit.get("isBlocked"):
+            ttl = self._ttl_seconds(points_limit.get("ttl"))
+            if ttl is not None:
+                delays.append(ttl)
+
+        field_limits = info.get("fieldSpecificRateLimits") or {}
+        limits = [
+            (edge or {}).get("node") or {}
+            for edge in field_limits.get("edges", [])
+        ]
+        measurement_limits = [
+            limit for limit in limits if "measurement" in str(limit.get("field", "")).lower()
+        ]
+        for limit in measurement_limits or limits:
+            if not limit.get("isBlocked"):
+                continue
+            ttl = self._ttl_seconds(limit.get("ttl"))
+            if ttl is not None:
+                delays.append(ttl)
+
+        return max(delays, default=fallback) + GRAPHQL_RATE_LIMIT_TTL_SAFETY_SECONDS
+
+    def _get_rate_limit_info(self, headers: dict) -> dict:
+        try:
+            response = self._post_with_retry(
+                json_payload={"query": RATE_LIMIT_INFO_QUERY, "variables": {}},
+                headers=headers,
+            )
+            response.raise_for_status()
+            return (response.json().get("data") or {}).get("rateLimitInfo") or {}
+        except (AttributeError, ValueError, TypeError, requests.exceptions.RequestException) as exc:
+            self._log_debug(f"Could not read GraphQL rate-limit info: {exc}")
+            return {}
+
+    @staticmethod
+    def _rate_interval_seconds(rate: str | None) -> float | None:
+        try:
+            amount, unit = str(rate).strip().lower().split("/", 1)
+            unit_seconds = {"s": 1.0, "m": 60.0, "h": 3600.0}[unit]
+            return max(unit_seconds / float(amount), 0.1)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return None
+
+    @staticmethod
+    def _ttl_seconds(ttl: object) -> int | None:
+        try:
+            value = int(ttl)
+        except (TypeError, ValueError):
+            return None
+        now = int(time.time())
+        return max(value - now, 1) if value > now else max(value, 1)
+
+    def _wait_for_measurement_request(self, headers: dict) -> None:
+        now = time.monotonic()
+        if now - self._rate_limit_info_checked_at >= GRAPHQL_RATE_LIMIT_INFO_CACHE_SECONDS:
+            info = self._get_rate_limit_info(headers)
+            self._rate_limit_info_checked_at = now
+
+            field_limits = (info.get("fieldSpecificRateLimits") or {}).get("edges", [])
+            measurement_intervals = [
+                interval
+                for edge in field_limits
+                for limit in [(edge or {}).get("node") or {}]
+                if "measurement" in str(limit.get("field", "")).lower()
+                for interval in [self._rate_interval_seconds(limit.get("rate"))]
+                if interval is not None
+            ]
+            self._measurement_request_interval = max(
+                measurement_intervals,
+                default=GRAPHQL_MEASUREMENT_FALLBACK_INTERVAL_SECONDS,
+            )
+            self._log_debug(
+                "Measurements rate limit: "
+                f"{self._measurement_request_interval:.1f}s between requests"
+            )
+
+            for edge in field_limits:
+                limit = (edge or {}).get("node") or {}
+                if not limit.get("isBlocked") or "measurement" not in str(limit.get("field", "")).lower():
+                    continue
+                ttl = self._ttl_seconds(limit.get("ttl"))
+                if ttl is not None:
+                    self._next_measurement_request_at = max(
+                        self._next_measurement_request_at,
+                        now + ttl + GRAPHQL_RATE_LIMIT_TTL_SAFETY_SECONDS,
+                    )
+
+        delay = max(0.0, self._next_measurement_request_at - time.monotonic())
+        if delay >= 1.0:
+            wait_seconds = max(1, int(delay + 0.999))
+            if self.rate_limit_callback:
+                self.rate_limit_callback(wait_seconds, 0, 0)
+            else:
+                time.sleep(delay)
+        elif delay:
+            time.sleep(delay)
+
+        self._next_measurement_request_at = (
+            max(time.monotonic(), self._next_measurement_request_at)
+            + (self._measurement_request_interval or GRAPHQL_MEASUREMENT_FALLBACK_INTERVAL_SECONDS)
+        )
 
     def get_account_details(self, account_number: str) -> dict:
         """Get account details including meter information."""
@@ -1513,57 +1666,70 @@ class OctopusGermanyClient:
         start_utc = start_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         end_utc = end_local.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        variables = {
-            "propertyId": property_id,
-            "timezone": "Europe/Berlin",
-            "startAt": start_utc,
-            "endAt": end_utc,
-            "utilityFilters": [
-                {
-                    "electricityFilters": {
-                        "readingFrequencyType": READING_FREQUENCY_TYPE,
-                        "marketSupplyPointId": str(market_supply_point_id),
-                        "readingDirection": _normalize_reading_direction(reading_direction),
-                    }
-                }
-            ],
-        }
-        result = self._graphql_request(SMART_USAGE_QUERY, variables)
-        property_data = (result or {}).get("property") or {}
-        measurements_data = property_data.get("measurements") or {}
-        edges = measurements_data.get("edges", [])
-
         intervals: list[dict] = []
-        for edge in edges:
-            node = edge.get("node", {})
-            value = node.get("value")
-            start_at = node.get("startAt")
-            end_at = node.get("endAt")
-            if value is None or not start_at or not end_at:
-                continue
-
-            try:
-                start_time = normalize_datetime(datetime.fromisoformat(start_at))
-                end_time = normalize_datetime(datetime.fromisoformat(end_at))
-                direction = _extract_reading_direction(node)
-                intervals.append(
+        after_cursor = None
+        seen_cursors: set[str] = set()
+        while True:
+            variables = {
+                "propertyId": property_id,
+                "first": GRAPHQL_PAGE_SIZE,
+                "after": after_cursor,
+                "timezone": "Europe/Berlin",
+                "startAt": start_utc,
+                "endAt": end_utc,
+                "utilityFilters": [
                     {
-                        "start": start_time,
-                        "end": end_time,
-                        "direction": direction,
-                        "energy_kwh": float(value),
-                        "consumption_kwh": float(value),
-                        "net_kwh": float(value) if direction == "CONSUMPTION" else -float(value),
-                        "duration_seconds": int((end_time - start_time).total_seconds()),
-                        "unit": node.get("unit", "kWh"),
-                        "source": node.get("source", "GetSmartUsage"),
-                        "api_start": str(start_at),
-                        "api_end": str(end_at),
-                        "api_value": str(value),
+                        "electricityFilters": {
+                            "readingFrequencyType": READING_FREQUENCY_TYPE,
+                            "marketSupplyPointId": str(market_supply_point_id),
+                            "readingDirection": _normalize_reading_direction(reading_direction),
+                        }
                     }
-                )
-            except (ValueError, TypeError):
-                continue
+                ],
+            }
+            result = self._graphql_request(SMART_USAGE_QUERY, variables)
+            property_data = (result or {}).get("property") or {}
+            measurements_data = property_data.get("measurements") or {}
+
+            for edge in measurements_data.get("edges", []):
+                node = edge.get("node", {})
+                value = node.get("value")
+                start_at = node.get("startAt")
+                end_at = node.get("endAt")
+                if value is None or not start_at or not end_at:
+                    continue
+
+                try:
+                    start_time = normalize_datetime(datetime.fromisoformat(start_at))
+                    end_time = normalize_datetime(datetime.fromisoformat(end_at))
+                    direction = _extract_reading_direction(node)
+                    intervals.append(
+                        {
+                            "start": start_time,
+                            "end": end_time,
+                            "direction": direction,
+                            "energy_kwh": float(value),
+                            "consumption_kwh": float(value),
+                            "net_kwh": float(value) if direction == "CONSUMPTION" else -float(value),
+                            "duration_seconds": int((end_time - start_time).total_seconds()),
+                            "unit": node.get("unit", "kWh"),
+                            "source": node.get("source", "GetSmartUsage"),
+                            "api_start": str(start_at),
+                            "api_end": str(end_at),
+                            "api_value": str(value),
+                        }
+                    )
+                except (ValueError, TypeError):
+                    continue
+
+            page_info = measurements_data.get("pageInfo") or {}
+            if not page_info.get("hasNextPage"):
+                break
+            next_cursor = page_info.get("endCursor")
+            if not next_cursor or next_cursor in seen_cursors:
+                break
+            seen_cursors.add(next_cursor)
+            after_cursor = next_cursor
 
         intervals.sort(key=lambda item: item["start"])
         return intervals
@@ -1715,7 +1881,7 @@ class OctopusGermanyClient:
                 # Build variables for the measurements query
                 variables = {
                     "propertyId": property_id,
-                    "first": 100,
+                    "first": GRAPHQL_PAGE_SIZE,
                     "utilityFilters": [{
                         "electricityFilters": {
                             "readingFrequencyType": READING_FREQUENCY_TYPE,

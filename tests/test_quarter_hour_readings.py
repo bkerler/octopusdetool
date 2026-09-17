@@ -1,4 +1,5 @@
 import shutil
+import time
 from datetime import date, datetime, timedelta
 
 import openpyxl
@@ -9,6 +10,7 @@ from octopusdetool.octopusdetool import (
     OctopusGermanyClient,
     READING_FREQUENCY_TYPE,
     READING_INTERVAL,
+    RATE_LIMIT_INFO_QUERY,
     fill_excel_template,
     get_bundled_excel_template_path,
     normalize_datetime,
@@ -76,10 +78,11 @@ def test_both_graphql_paths_request_native_intervals() -> None:
         == READING_FREQUENCY_TYPE
         for request in requests
     )
+    assert all(request["first"] == 99 for request in requests)
     assert all(reading["end"] - reading["start"] == READING_INTERVAL for reading in readings)
 
 
-def test_graphql_rate_limit_retries_with_backoff() -> None:
+def test_graphql_rate_limit_retries_using_api_ttl() -> None:
     client = OctopusGermanyClient("", "")
     client.token = "test"
     rate_limit = {
@@ -88,8 +91,26 @@ def test_graphql_rate_limit_retries_with_backoff() -> None:
         ],
         "data": {"property": {"measurements": None}},
     }
+    rate_limit_info = {
+        "data": {
+            "rateLimitInfo": {
+                "pointsAllowanceRateLimit": {"isBlocked": False, "ttl": 0},
+                "fieldSpecificRateLimits": {
+                    "edges": [{"node": {
+                        "field": "property.measurements",
+                        "isBlocked": True,
+                        "ttl": 42,
+                    }}]
+                },
+            }
+        }
+    }
     success = {"data": {"property": {"measurements": {"edges": []}}}}
-    responses = iter([_ResponseStub(rate_limit), _ResponseStub(rate_limit), _ResponseStub(success)])
+    responses = iter([
+        _ResponseStub(rate_limit),
+        _ResponseStub(rate_limit_info),
+        _ResponseStub(success),
+    ])
     retries = []
 
     client._post_with_retry = lambda **_kwargs: next(responses)
@@ -98,8 +119,23 @@ def test_graphql_rate_limit_retries_with_backoff() -> None:
     )
 
     assert client._graphql_request("query", {}) == {"property": {"measurements": {"edges": []}}}
-    assert retries == [(5, 1, 3), (10, 2, 3)]
+    assert retries == [(44, 1, 1)]
     assert client.last_error_kind is None
+
+
+def test_measurement_rate_limit_rate_is_converted_to_request_spacing() -> None:
+    assert OctopusGermanyClient._rate_interval_seconds("10/s") == 0.1
+    assert OctopusGermanyClient._rate_interval_seconds("10/m") == 6.0
+
+
+def test_rate_limit_query_requests_measurement_rate() -> None:
+    assert "                    rate\n" in RATE_LIMIT_INFO_QUERY
+
+
+def test_rate_limit_ttl_accepts_duration_or_unix_timestamp() -> None:
+    assert OctopusGermanyClient._ttl_seconds(42) == 42
+    unix_ttl = int(time.time()) + 42
+    assert 41 <= OctopusGermanyClient._ttl_seconds(unix_ttl) <= 42
 
 
 def test_smart_usage_handles_graphql_null_measurements() -> None:
