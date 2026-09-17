@@ -171,6 +171,8 @@ Die Daten werden in `~/Documents/smartmeter_data/` gespeichert:
 | `end` | Endzeitpunkt (DD.MM.YYYY HH:MM:SS) |
 | `consumption_kwh` | Energieverbrauch in kWh |
 
+Die API-Rohdaten werden in 15-Minuten-Intervallen gespeichert. Der Excel-Export fasst sie für die bestehende Stundenübersicht je Stunde zusammen.
+
 ### JSON-Format
 
 ```json
@@ -183,9 +185,9 @@ Die Daten werden in `~/Documents/smartmeter_data/` gespeichert:
   "readings": [
     {
       "start": "2024-01-01T00:00:00+00:00",
-      "end": "2024-01-01T01:00:00+00:00",
+      "end": "2024-01-01T00:15:00+00:00",
       "consumption_kwh": 0.5,
-      "duration_seconds": 3600,
+      "duration_seconds": 900,
       "unit": "kWh"
     }
   ]
@@ -201,9 +203,9 @@ metadata:
   source: Octopus Energy Germany Smart Meter
 readings:
   - start: '2024-01-01T00:00:00+00:00'
-    end: '2024-01-01T01:00:00+00:00'
+    end: '2024-01-01T00:15:00+00:00'
     consumption_kwh: 0.5
-    duration_seconds: 3600
+    duration_seconds: 900
     unit: kWh
 ```
 

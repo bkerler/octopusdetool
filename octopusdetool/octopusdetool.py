@@ -58,6 +58,12 @@ DISPLAY_NAME_DYNAMIC_OCTOPUS = "dynamicoctopus"
 REQUEST_TIMEOUT_SECONDS = 30
 REQUEST_TIMEOUT_RETRIES = 2
 REQUEST_TIMEOUT_RETRY_DELAY_SECONDS = 2
+GRAPHQL_RATE_LIMIT_RETRIES = 3
+GRAPHQL_RATE_LIMIT_RETRY_DELAY_SECONDS = 5
+# Ask for the meter's native interval. This avoids market-specific aggregation
+# limits; the current German smart-meter feed returns 15-minute records.
+READING_FREQUENCY_TYPE = "RAW_INTERVAL"
+READING_INTERVAL = timedelta(minutes=15)
 TRUDI_CONSUMPTION_OBIS_CODES = {"0100010800FF", "1-0:1.8.0", "1.8.0"}
 
 
@@ -982,7 +988,7 @@ query GetRateStructureForProductAgreement($agreementId: ID!) {
 }
 """
 
-# Consumption query - using measurements with hourly interval filter and pagination
+# Consumption query - using measurements with the native interval and pagination
 MEASUREMENTS_QUERY = """
 query getAccountMeasurements(
     $propertyId: ID!
@@ -1171,6 +1177,7 @@ class OctopusGermanyClient:
         self.debug = debug
         self.last_error_kind: str | None = None
         self.last_error_message: str | None = None
+        self.rate_limit_callback = None
 
     def _log_debug(self, message: str):
         """Print debug message if debug mode is enabled."""
@@ -1304,47 +1311,70 @@ class OctopusGermanyClient:
             print(f"Payload: {json.dumps(payload, indent=2)}")
             print("="*80)
         
-        try:
-            response = self._post_with_retry(
-                json_payload=payload,
-                headers=headers,
-            )
-            
-            if self.debug:
-                print("\n" + "="*80)
-                print("GRAPHQL RESPONSE:")
-                print("="*80)
-                print(f"Status: {response.status_code}")
-                try:
-                    response_data = response.json()
-                    print(f"Body: {json.dumps(response_data, indent=2)}")
-                except:
-                    print(f"Body: {response.text}")
-                print("="*80 + "\n")
-            
-            response.raise_for_status()
-            data = response.json()
-            
-            if "errors" in data and not self.debug:
-                error_message = f"GraphQL errors: {data['errors']}"
-                self._set_last_error("graphql", error_message)
+        for rate_limit_attempt in range(GRAPHQL_RATE_LIMIT_RETRIES + 1):
+            try:
+                response = self._post_with_retry(
+                    json_payload=payload,
+                    headers=headers,
+                )
+
+                if self.debug:
+                    print("\n" + "="*80)
+                    print("GRAPHQL RESPONSE:")
+                    print("="*80)
+                    print(f"Status: {response.status_code}")
+                    try:
+                        response_data = response.json()
+                        print(f"Body: {json.dumps(response_data, indent=2)}")
+                    except:
+                        print(f"Body: {response.text}")
+                    print("="*80 + "\n")
+
+                response.raise_for_status()
+                data = response.json()
+                errors = data.get("errors") or []
+
+                if errors:
+                    error_message = f"GraphQL errors: {errors}"
+                    rate_limited = any(
+                        error.get("extensions", {}).get("errorCode") == "KT-CT-1199"
+                        for error in errors
+                        if isinstance(error, dict)
+                    )
+                    if rate_limited and rate_limit_attempt < GRAPHQL_RATE_LIMIT_RETRIES:
+                        delay = GRAPHQL_RATE_LIMIT_RETRY_DELAY_SECONDS * (2 ** rate_limit_attempt)
+                        message = (
+                            f"Zu viele Anfragen, neuer Versuch in {delay}s "
+                            f"({rate_limit_attempt + 1}/{GRAPHQL_RATE_LIMIT_RETRIES})..."
+                        )
+                        print(message)
+                        if self.rate_limit_callback:
+                            self.rate_limit_callback(
+                                delay,
+                                rate_limit_attempt + 1,
+                                GRAPHQL_RATE_LIMIT_RETRIES,
+                            )
+                        else:
+                            time.sleep(delay)
+                        continue
+
+                    self._set_last_error("rate_limit" if rate_limited else "graphql", error_message)
+                    print(error_message)
+                    return data.get("data") or {}
+
+                self._clear_last_error()
+                return data.get("data") or {}
+
+            except requests.exceptions.Timeout as e:
+                error_message = f"Zeitueberschreitung: {e}"
+                self._set_last_error("timeout", error_message)
                 print(error_message)
-                # Return partial data if available
-                return data.get("data", {})
-            
-            self._clear_last_error()
-            return data.get("data", {})
-            
-        except requests.exceptions.Timeout as e:
-            error_message = f"Zeitueberschreitung: {e}"
-            self._set_last_error("timeout", error_message)
-            print(error_message)
-            return {}
-        except requests.exceptions.RequestException as e:
-            error_message = f"Netzwerkfehler: {e}"
-            self._set_last_error("network", error_message)
-            print(error_message)
-            return {}
+                return {}
+            except requests.exceptions.RequestException as e:
+                error_message = f"Netzwerkfehler: {e}"
+                self._set_last_error("network", error_message)
+                print(error_message)
+                return {}
 
     def get_account_details(self, account_number: str) -> dict:
         """Get account details including meter information."""
@@ -1472,7 +1502,7 @@ class OctopusGermanyClient:
         day: datetime | date,
         reading_direction: str = "CONSUMPTION",
     ) -> list[dict]:
-        """Fetch a single local day of hourly consumption via GetSmartUsage."""
+        """Fetch a single local day of 15-minute consumption via GetSmartUsage."""
         if isinstance(day, datetime):
             local_day = normalize_datetime(day).date()
         else:
@@ -1491,7 +1521,7 @@ class OctopusGermanyClient:
             "utilityFilters": [
                 {
                     "electricityFilters": {
-                        "readingFrequencyType": "HOUR_INTERVAL",
+                        "readingFrequencyType": READING_FREQUENCY_TYPE,
                         "marketSupplyPointId": str(market_supply_point_id),
                         "readingDirection": _normalize_reading_direction(reading_direction),
                     }
@@ -1499,8 +1529,8 @@ class OctopusGermanyClient:
             ],
         }
         result = self._graphql_request(SMART_USAGE_QUERY, variables)
-        property_data = result.get("property", {})
-        measurements_data = property_data.get("measurements", {})
+        property_data = (result or {}).get("property") or {}
+        measurements_data = property_data.get("measurements") or {}
         edges = measurements_data.get("edges", [])
 
         intervals: list[dict] = []
@@ -1547,7 +1577,7 @@ class OctopusGermanyClient:
         progress_callback=None,
         reading_direction: str = "CONSUMPTION",
     ) -> list[dict]:
-        """Fetch hourly consumption day-by-day via GetSmartUsage."""
+        """Fetch 15-minute consumption day-by-day via GetSmartUsage."""
         today = get_today_start()
         yesterday_end = today - timedelta(seconds=1)
 
@@ -1648,7 +1678,7 @@ class OctopusGermanyClient:
 
     def get_consumption_graphql(self, property_id, period_from=None, period_to=None, fetch_all=False, progress_callback=None):
         """
-        Get consumption data using GraphQL measurements query with hourly interval filter.
+        Get raw consumption data using 15-minute GraphQL measurement intervals.
         
         Args:
             property_id: The property ID (from find_smart_meter)
@@ -1658,7 +1688,7 @@ class OctopusGermanyClient:
             progress_callback: Optional callback function(current_count, page_num) to report progress
             
         Returns:
-            List of consumption readings with start, end, and consumption_kwh
+            List of raw interval readings with start, end, and consumption_kwh
         """
         # Safety: Never fetch data for current day or future - data may be incomplete
         today = get_today_start()
@@ -1670,16 +1700,15 @@ class OctopusGermanyClient:
         
         all_intervals = []
         total_page_count = 0
-        max_pages = 100 if fetch_all else 1
-        
         self._log_debug(f"Fetching measurements for property {property_id}")
-        self._log_debug(f"fetch_all={fetch_all}, max_pages={max_pages}")
+        self._log_debug(f"fetch_all={fetch_all}")
 
         for requested_direction in ("CONSUMPTION", "GENERATION"):
             after_cursor = None
+            seen_cursors: set[str] = set()
             page_count = 0
 
-            while page_count < max_pages:
+            while True:
                 page_count += 1
                 total_page_count += 1
 
@@ -1689,7 +1718,7 @@ class OctopusGermanyClient:
                     "first": 100,
                     "utilityFilters": [{
                         "electricityFilters": {
-                            "readingFrequencyType": "HOUR_INTERVAL",
+                            "readingFrequencyType": READING_FREQUENCY_TYPE,
                             "readingDirection": requested_direction,
                         }
                     }],
@@ -1711,6 +1740,9 @@ class OctopusGermanyClient:
                 )
 
                 result = self._graphql_request(MEASUREMENTS_QUERY, variables)
+
+                if self.last_error_kind in {"rate_limit", "graphql"}:
+                    return all_intervals
 
                 if not result:
                     self._log_debug(f"No {requested_direction} response data, stopping")
@@ -1777,16 +1809,22 @@ class OctopusGermanyClient:
                 if progress_callback:
                     progress_callback(len(all_intervals), total_page_count)
 
-                # Check if there are more pages
+                if not fetch_all:
+                    self._log_debug("fetch_all=False, stopping after first page")
+                    break
+
+                # Check if there are more pages. Stop on malformed/repeated cursors
+                # so a bad API response cannot loop forever.
                 if not page_info.get("hasNextPage"):
                     self._log_debug(f"No more {requested_direction} pages available")
                     break
 
-                after_cursor = page_info.get("endCursor")
-
-                if not fetch_all:
-                    self._log_debug("fetch_all=False, stopping after first page")
+                next_cursor = page_info.get("endCursor")
+                if not next_cursor or next_cursor in seen_cursors:
+                    self._log_debug(f"Invalid next cursor for {requested_direction}, stopping pagination")
                     break
+                seen_cursors.add(next_cursor)
+                after_cursor = next_cursor
         
         # Sort by start time
         all_intervals.sort(key=lambda x: x["start"])
@@ -2209,15 +2247,18 @@ def fill_excel_template(
         ws_einstellungen = wb['Einstellungen']  # Settings sheet
         
         # Create a dictionary of readings by datetime for quick lookup
-        # Key: (date, hour) tuple, Value: consumption_kwh
+        # Key: (date, hour) tuple, Value: hourly total of raw intervals.
         readings_by_datetime = {}
         for reading in readings:
             start = reading["start"]
             date_key = start.strftime("%Y-%m-%d")
             hour_key = start.hour  # 0-23
-            readings_by_datetime[(date_key, hour_key)] = reading["consumption_kwh"]
+            key = (date_key, hour_key)
+            readings_by_datetime[key] = readings_by_datetime.get(key, 0.0) + float(
+                reading["consumption_kwh"]
+            )
         
-        print(f"{len(readings_by_datetime)} stündliche Einträge zum Abgleich vorhanden")
+        print(f"{len(readings_by_datetime)} stündliche Summen zum Abgleich vorhanden")
         
         # Get date range from CSV
         csv_dates = sorted(set(k[0] for k in readings_by_datetime.keys()))
@@ -2869,7 +2910,7 @@ def main():
     need_to_fetch = True
     if existing_data and not args.period_from and not args.period_to:
         # We have data and no specific date range requested by user
-        # Hourly intervals are [start, end), so yesterday is complete only if the
+        # Intervals are [start, end), so yesterday is complete only if the
         # last interval ends at or after today's midnight.
         if latest_interval_end and latest_interval_end >= today:
             print(f"\nCSV already has complete data up to {yesterday.date()}")

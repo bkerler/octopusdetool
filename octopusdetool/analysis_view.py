@@ -11,7 +11,7 @@ from PySide6.QtCharts import (
     QStackedBarSeries,
     QValueAxis,
 )
-from PySide6.QtCore import QMargins, Qt
+from PySide6.QtCore import QEvent, QMargins, Qt
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter
 from PySide6.QtWidgets import QLabel
 
@@ -60,6 +60,7 @@ class TariffChartView(QChartView):
         self._category_axis_title = ""
         self._value_axis_title = ""
         self._series: QStackedBarSeries | None = None
+        self._hour_summary_index: int | None = None
         self._hover_label = QLabel(self.viewport())
         self._hover_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._hover_label.setStyleSheet(
@@ -80,6 +81,7 @@ class TariffChartView(QChartView):
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
         self.viewport().setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.viewport().installEventFilter(self)
         self.setChart(self._create_chart())
 
     def update_buckets(
@@ -105,7 +107,13 @@ class TariffChartView(QChartView):
         chart = self._create_chart()
         self.setChart(chart)
 
-        categories = [bucket.axis_label for bucket in self._buckets] or [""]
+        quarter_hour_layout = len(self._buckets) == 96
+        series_count = 4 if quarter_hour_layout else 1
+        categories = (
+            [self._buckets[hour * 4].axis_label for hour in range(24)]
+            if quarter_hour_layout
+            else [bucket.axis_label for bucket in self._buckets]
+        ) or [""]
         palette = [
             "#6f4df6",
             "#e98bff",
@@ -116,7 +124,7 @@ class TariffChartView(QChartView):
         ]
 
         rate_series_values: list[list[float]] = []
-        series = QStackedBarSeries()
+        series_list = [QStackedBarSeries() for _ in range(series_count)]
         for index, rate_name in enumerate(self._rate_order):
             rate_values = [
                 bucket.rate_cost_eur(rate_name, self._rate_prices_ct.get(rate_name, 0.0))
@@ -126,13 +134,27 @@ class TariffChartView(QChartView):
             ]
             rate_series_values.append(rate_values)
 
-            bar_set = QBarSet(rate_name)
-            color = QColor(palette[index % len(palette)])
-            bar_set.setColor(color)
-            bar_set.setBorderColor(color)
-            bar_set.append(rate_values or [0.0])
-            bar_set.hovered.connect(self._on_bar_hovered)
-            if any(value > 0 for value in rate_values):
+            has_rate_values = any(value > 0 for value in rate_values)
+            if not has_rate_values:
+                continue
+            for quarter, series in enumerate(series_list):
+                quarter_values = rate_values[quarter::4] if quarter_hour_layout else rate_values
+                if quarter_hour_layout and quarter > 0 and not any(value > 0 for value in quarter_values):
+                    continue
+                bar_set = QBarSet(rate_name)
+                color = QColor(palette[index % len(palette)])
+                bar_set.setColor(color)
+                bar_set.setBorderColor(color)
+                bar_set.append(quarter_values or [0.0])
+                if quarter_hour_layout:
+                    bar_set.hovered.connect(
+                        lambda status, bar_index, q=quarter: self._on_bar_hovered(
+                            status,
+                            bar_index * 4 + q,
+                        )
+                    )
+                else:
+                    bar_set.hovered.connect(self._on_bar_hovered)
                 series.append(bar_set)
 
         if self._show_generation:
@@ -141,24 +163,52 @@ class TariffChartView(QChartView):
                 for bucket in self._buckets
             ]
             if any(value != 0 for value in generation_values):
-                generation_set = QBarSet("Einspeisung")
-                generation_color = QColor("#48c7ff")
-                generation_set.setColor(generation_color)
-                generation_set.setBorderColor(generation_color)
-                generation_set.append(generation_values)
-                generation_set.hovered.connect(self._on_bar_hovered)
-                series.append(generation_set)
+                for quarter, series in enumerate(series_list):
+                    quarter_values = (
+                        generation_values[quarter::4] if quarter_hour_layout else generation_values
+                    )
+                    if quarter_hour_layout and quarter > 0 and not any(value != 0 for value in quarter_values):
+                        continue
+                    generation_set = QBarSet("Einspeisung")
+                    generation_color = QColor("#48c7ff")
+                    generation_set.setColor(generation_color)
+                    generation_set.setBorderColor(generation_color)
+                    generation_set.append(quarter_values)
+                    if quarter_hour_layout:
+                        generation_set.hovered.connect(
+                            lambda status, bar_index, q=quarter: self._on_bar_hovered(
+                                status,
+                                bar_index * 4 + q,
+                            )
+                        )
+                    else:
+                        generation_set.hovered.connect(self._on_bar_hovered)
+                    series.append(generation_set)
 
-        if not series.barSets():
-            empty_set = QBarSet("Keine Daten")
-            empty_set.setColor(QColor("#54408f"))
-            empty_set.setBorderColor(QColor("#54408f"))
-            empty_set.append([0.0] * len(categories))
-            empty_set.hovered.connect(self._on_bar_hovered)
-            series.append(empty_set)
+        if not any(series.barSets() for series in series_list):
+            for quarter, series in enumerate(series_list):
+                empty_set = QBarSet("Keine Daten")
+                empty_set.setColor(QColor("#54408f"))
+                empty_set.setBorderColor(QColor("#54408f"))
+                empty_values = [0.0] * (24 if quarter_hour_layout else len(categories))
+                empty_set.append(empty_values)
+                if quarter_hour_layout:
+                    empty_set.hovered.connect(
+                        lambda status, bar_index, q=quarter: self._on_bar_hovered(
+                            status,
+                            bar_index * 4 + q,
+                        )
+                    )
+                else:
+                    empty_set.hovered.connect(self._on_bar_hovered)
+                series.append(empty_set)
 
-        self._series = series
-        chart.addSeries(series)
+        self._series = series_list[0]
+        for quarter, series in enumerate(series_list):
+            chart.addSeries(series)
+            if quarter_hour_layout and quarter:
+                for marker in chart.legend().markers(series):
+                    marker.setVisible(False)
 
         axis_x = QBarCategoryAxis()
         axis_x.append(categories)
@@ -186,8 +236,9 @@ class TariffChartView(QChartView):
 
         chart.addAxis(axis_x, Qt.AlignmentFlag.AlignBottom)
         chart.addAxis(axis_y, Qt.AlignmentFlag.AlignLeft)
-        series.attachAxis(axis_x)
-        series.attachAxis(axis_y)
+        for series in series_list:
+            series.attachAxis(axis_x)
+            series.attachAxis(axis_y)
         self.viewport().update()
 
     def _create_chart(self) -> QChart:
@@ -244,13 +295,77 @@ class TariffChartView(QChartView):
         self._hide_hover_label()
         super().leaveEvent(event)
 
-    def _on_bar_hovered(self, status: bool, index: int) -> None:
-        if not status or index >= len(self._buckets):
+    def eventFilter(self, watched, event) -> bool:
+        if watched is self.viewport():
+            if event.type() == QEvent.Type.MouseMove:
+                hour = self._hour_for_axis_position(event.position().toPoint())
+                if hour is None:
+                    if self._hour_summary_index is not None:
+                        self._hide_hover_label()
+                elif hour != self._hour_summary_index:
+                    self._show_hour_summary(hour)
+            elif event.type() == QEvent.Type.Leave:
+                self._hide_hover_label()
+        return super().eventFilter(watched, event)
+
+    def _hour_for_axis_position(self, position) -> int | None:
+        if len(self._buckets) != 96:
+            return None
+
+        plot_area = self.chart().plotArea()
+        axis_label_bottom = plot_area.bottom() + self.fontMetrics().height() + 8
+        if not (
+            plot_area.left() <= position.x() <= plot_area.right()
+            and plot_area.bottom() < position.y() <= axis_label_bottom
+        ):
+            return None
+
+        category_width = plot_area.width() / 24
+        return min(23, int((position.x() - plot_area.left()) / category_width))
+
+    def _show_hour_summary(self, hour: int) -> None:
+        hour_buckets = self._buckets[hour * 4 : hour * 4 + 4]
+        if len(hour_buckets) != 4:
             self._hide_hover_label()
             return
 
+        summary = DisplayBucket(axis_label=f"{hour:02d}", tooltip_label="")
+        date_label = hour_buckets[0].tooltip_label.split(" ", 1)[0]
+        for bucket in hour_buckets:
+            for rate_name, value in bucket.rate_values_kwh.items():
+                summary.rate_values_kwh[rate_name] = (
+                    summary.rate_values_kwh.get(rate_name, 0.0) + value
+                )
+            summary.generation_kwh += bucket.generation_kwh
+            if bucket.total_kwh or bucket.generation_kwh:
+                summary.meter_reading_kwh = bucket.meter_reading_kwh
+
+        self._hour_summary_index = hour
+        self._show_bucket_tooltip(
+            summary,
+            title=f"{date_label} {hour:02d}:00–{hour + 1:02d}:00",
+        )
+
+    def _on_bar_hovered(self, status: bool, index: int) -> None:
+        if not status:
+            hour = self._hour_for_axis_position(
+                self.viewport().mapFromGlobal(QCursor.pos())
+            )
+            if hour is not None:
+                self._show_hour_summary(hour)
+            else:
+                self._hide_hover_label()
+            return
+        if index >= len(self._buckets):
+            self._hide_hover_label()
+            return
+
+        self._hour_summary_index = None
         bucket = self._buckets[index]
-        lines = [bucket.tooltip_label]
+        self._show_bucket_tooltip(bucket)
+
+    def _show_bucket_tooltip(self, bucket: DisplayBucket, *, title: str | None = None) -> None:
+        lines = [title or bucket.tooltip_label]
         lines.append(f"Zaehlerstand: {self._format_decimal(bucket.meter_reading_kwh, 3)} kWh")
         if self._show_currency:
             lines.append(f"Gesamt: {self._format_decimal(bucket.total_cost_eur(self._rate_prices_ct), 2)} EUR")
@@ -292,6 +407,7 @@ class TariffChartView(QChartView):
         self._hover_label.show()
 
     def _hide_hover_label(self) -> None:
+        self._hour_summary_index = None
         self._hover_label.hide()
 
     @staticmethod

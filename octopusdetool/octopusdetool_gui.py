@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from PySide6.QtCore import QDate, QFile, QIODeviceBase, QObject, QSize, Qt
+from PySide6.QtCore import QDate, QFile, QEventLoop, QIODeviceBase, QObject, QSize, QTimer, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPalette, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtWidgets import (
@@ -72,6 +72,7 @@ from octopusdetool.octopusdetool import (
     DISPLAY_NAME_OCTOPUS_GO,
     DISPLAY_NAME_OCTOPUS_HEAT,
     OctopusGermanyClient,
+    READING_INTERVAL,
     TARIFF_DYNAMIC,
     TARIFF_INTELLIGENT_12,
     TARIFF_INTELLIGENT_GO,
@@ -1327,11 +1328,11 @@ QDateEdit::drop-down {
 
     def _build_demo_readings(self, start: datetime, end: datetime) -> list[dict]:
         readings: list[dict] = []
-        cursor = start.replace(minute=0, second=0, microsecond=0)
+        cursor = start.replace(minute=(start.minute // 15) * 15, second=0, microsecond=0)
         while cursor < end:
             hour = cursor.hour
             rng = random.Random(
-                f"{cursor.date().isoformat()}:{hour}:{self.current_tariff_type}:{self._demo_mode_name}"
+                f"{cursor.date().isoformat()}:{hour}:{cursor.minute}:{self.current_tariff_type}:{self._demo_mode_name}"
             )
             weekday = cursor.weekday()
             seasonal = 0.92 + (0.10 * ((cursor.timetuple().tm_yday % 30) / 29.0))
@@ -1393,6 +1394,7 @@ QDateEdit::drop-down {
             net_kwh *= weekend_factor
             net_kwh *= night_factor if car_charging else daytime_factor
             net_kwh += rng.uniform(-0.05, 0.05)
+            net_kwh *= READING_INTERVAL.total_seconds() / 3600
             net_kwh = round(net_kwh, 3)
 
             if net_kwh < 0:
@@ -1405,18 +1407,18 @@ QDateEdit::drop-down {
             readings.append(
                 {
                     "start": cursor,
-                    "end": cursor + timedelta(hours=1),
+                    "end": cursor + READING_INTERVAL,
                     "energy_kwh": abs(net_kwh),
                     "consumption_kwh": abs(net_kwh),
                     "net_kwh": net_kwh,
                     "direction": direction,
                     "api_start": cursor.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "api_end": (cursor + timedelta(hours=1)).replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "api_end": (cursor + READING_INTERVAL).replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z"),
                     "api_value": str(abs(net_kwh)),
                     "source": source,
                 }
             )
-            cursor += timedelta(hours=1)
+            cursor += READING_INTERVAL
         return readings
 
     def _set_window_icon(self) -> None:
@@ -1795,7 +1797,29 @@ QDateEdit::drop-down {
             if self.progress_bar.isVisible() and self.scroll_area.verticalScrollBar().maximum() > 0:
                 self._fit_window_to_content()
 
+    def _wait_for_rate_limit_retry(self, delay: int, attempt: int, total_attempts: int) -> None:
+        self._set_status(
+            f"Zu viele Anfragen, neuer Versuch in {delay}s ({attempt}/{total_attempts})...",
+            update=True,
+        )
+        event_loop = QEventLoop(self.window)
+        timer = QTimer(event_loop)
+        timer.setSingleShot(True)
+        timer.timeout.connect(event_loop.quit)
+        timer.start(delay * 1000)
+        event_loop.exec()
+
     def _raise_client_error(self, client, action: str, fallback_message: str) -> None:
+        if client.last_error_kind == "rate_limit":
+            raise Exception(
+                f"Zu viele Anfragen {action}. "
+                "Bitte mindestens eine Minute warten und es dann erneut versuchen."
+            )
+        if client.last_error_kind == "graphql":
+            raise Exception(
+                f"GraphQL-Fehler {action}. "
+                "Bitte spaeter erneut versuchen."
+            )
         if client.last_error_kind == "timeout":
             raise Exception(
                 f"Zeitueberschreitung {action}. "
@@ -2938,7 +2962,7 @@ QDateEdit::drop-down {
         while cursor < last_start:
             if cursor not in existing_starts:
                 missing_entries.append(cursor)
-            cursor += timedelta(hours=1)
+            cursor += READING_INTERVAL
 
         return missing_entries
 
@@ -3002,14 +3026,24 @@ QDateEdit::drop-down {
         if mode == "day":
             start_date = selected_date
             end_date = selected_date
-            buckets = [
-                DisplayBucket(
-                    axis_label=f"{hour:02d}",
-                    tooltip_label=f"{selected_date.strftime('%d.%m.%Y')} {hour:02d}:00",
-                )
-                for hour in range(24)
-            ]
-            bucket_ranges = [(selected_date, selected_date) for _hour in range(24)]
+            buckets = []
+            for hour in range(24):
+                for quarter in range(4):
+                    buckets.append(
+                        DisplayBucket(
+                            axis_label=(
+                                f"{hour:02d}"
+                                if quarter == 0
+                                else ""
+                            ),
+                            tooltip_label=(
+                                f"{selected_date.strftime('%d.%m.%Y')} "
+                                f"{hour:02d}:{quarter * 15:02d}–{(hour * 60 + quarter * 15 + 15) // 60:02d}:"
+                                f"{(quarter * 15 + 15) % 60:02d}"
+                            ),
+                        )
+                    )
+            bucket_ranges = [(selected_date, selected_date) for _quarter in buckets]
             title = self._format_period_label(selected_date)
             first_column_title = "Stunde"
         elif mode == "week":
@@ -3146,7 +3180,7 @@ QDateEdit::drop-down {
                 continue
 
             if mode == "day":
-                index = reading_display_start.hour
+                index = reading_display_start.hour * 4 + reading_display_start.minute // 15
             elif mode == "week":
                 index = (reading_display_start.date() - start_date).days
             elif mode == "month":
@@ -3208,7 +3242,7 @@ QDateEdit::drop-down {
 
                 timestamp_label = (
                     f"{GERMAN_WEEKDAY_NAMES[reading_start.weekday()]}, "
-                    f"{reading_start.strftime('%d.%m.%Y %H:00')}"
+                    f"{reading_start.strftime('%d.%m.%Y %H:%M')}"
                 )
                 consumption_text = f"{self._format_decimal(abs(net_value), 3)} kWh"
                 octopus_meter_value = float(reading["meter_reading_kwh"])
@@ -3919,7 +3953,7 @@ QDateEdit::drop-down {
                 end_local.astimezone(timezone.utc)
                 - start_local.astimezone(timezone.utc)
             ).total_seconds()
-            // 3600
+            // READING_INTERVAL.total_seconds()
         )
 
     def _get_incomplete_days(
@@ -4137,6 +4171,7 @@ QDateEdit::drop-down {
                         self.password_line_edit.text(),
                         debug=self.debug_checkbox.isChecked(),
                     )
+                    client.rate_limit_callback = self._wait_for_rate_limit_retry
 
                     if not client.authenticate():
                         self._raise_client_error(
@@ -4238,7 +4273,13 @@ QDateEdit::drop-down {
                             progress_callback=update_progress,
                         )
 
-                        if client.last_error_kind in {"network", "timeout", "response"}:
+                        if client.last_error_kind in {
+                            "network",
+                            "timeout",
+                            "response",
+                            "rate_limit",
+                            "graphql",
+                        }:
                             self._raise_client_error(
                                 client,
                                 "beim Abrufen der Verbrauchsdaten",
@@ -4272,6 +4313,7 @@ QDateEdit::drop-down {
                                 self.password_line_edit.text(),
                                 debug=self.debug_checkbox.isChecked(),
                             )
+                            client.rate_limit_callback = self._wait_for_rate_limit_retry
                             if not client.authenticate():
                                 self._raise_client_error(
                                     client,
@@ -4304,6 +4346,18 @@ QDateEdit::drop-down {
                                     day=missing_day,
                                     reading_direction=reading_direction,
                                 )
+                                if client.last_error_kind in {
+                                    "network",
+                                    "timeout",
+                                    "response",
+                                    "rate_limit",
+                                    "graphql",
+                                }:
+                                    self._raise_client_error(
+                                        client,
+                                        "beim Abrufen der Verbrauchsdaten",
+                                        "Verbrauchsdaten konnten nicht geladen werden.",
+                                    )
                                 fallback_readings.extend(day_readings)
                         if fallback_readings:
                             all_readings.extend(fallback_readings)
