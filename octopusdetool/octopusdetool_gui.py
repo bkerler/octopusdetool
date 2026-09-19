@@ -613,6 +613,7 @@ class OctopusSmartMeterGUI:
         self.consumption_csv_path = get_default_consumption_csv_path()
         self.existing_data: list[dict] = []
         self.latest_timestamp: datetime | None = None
+        self._rate_limit_retrieval_day: date | None = None
         self.reference_readings: list[dict] = []
         self.selected_reference_id: str | None = None
         self.trudi_readings: list[dict] = []
@@ -1800,11 +1801,13 @@ QDateEdit::drop-down {
                 self._fit_window_to_content()
 
     def _wait_for_rate_limit_retry(self, delay: int, attempt: int, total_attempts: int) -> None:
+        retrieval_day = getattr(self, "_rate_limit_retrieval_day", None)
+        day_suffix = f" fuer den {retrieval_day:%d.%m.%Y}" if retrieval_day else ""
         if attempt == 0:
-            message = f"API-Limit: naechster Abruf in {delay}s..."
+            message = f"API-Limit: naechster Abruf{day_suffix} in {delay}s..."
         else:
             message = (
-                f"Zu viele Anfragen, neuer Versuch in {delay}s "
+                f"Zu viele Anfragen, neuer Versuch{day_suffix} in {delay}s "
                 f"({attempt}/{total_attempts})..."
             )
         self._set_status(
@@ -1821,7 +1824,10 @@ QDateEdit::drop-down {
             timer.start(wait_seconds * 1000)
             event_loop.exec()
             remaining -= wait_seconds
-        self._set_status("API-Limit: Wartezeit beendet, Datenabruf laeuft...", update=True)
+        self._set_status(
+            f"API-Limit: Wartezeit beendet, Datenabruf{day_suffix} laeuft...",
+            update=True,
+        )
 
     def _raise_client_error(self, client, action: str, fallback_message: str) -> None:
         if client.last_error_kind == "rate_limit":
@@ -4088,6 +4094,7 @@ QDateEdit::drop-down {
             self.save_config()
         self._start_progress()
         previous_cached_readings = list(self.existing_data)
+        self._rate_limit_retrieval_day = None
 
         try:
             with self._capture_debug_output():
@@ -4272,6 +4279,9 @@ QDateEdit::drop-down {
                         self.save_config(force=True)
 
                     if need_to_fetch:
+                        self._rate_limit_retrieval_day = (
+                            normalize_datetime(fetch_from).date() if fetch_from else None
+                        )
                         self._set_status(
                             f"Kundennummer gefunden: {account_number}",
                             update=True,
@@ -4374,6 +4384,7 @@ QDateEdit::drop-down {
                         )
                         fallback_readings: list[dict] = []
                         for missing_day in days_to_fetch:
+                            self._rate_limit_retrieval_day = missing_day
                             for reading_direction in ("CONSUMPTION", "GENERATION"):
                                 day_readings = client.get_smart_usage(
                                     property_id=property_id,
