@@ -7,7 +7,6 @@ project_name = "OctopusDETool"
 bundle = "de.revskills.octopusdetool"
 version = "1.2.4"
 url = "https://github.com/bkerler/octopusdetool"
-license = "GPL-3.0+"
 license-files = ["LICENSE"]
 description = "GUI for the Octopus Energy DE Smart Meter Data Fetcher"
 author = "bkerler"
@@ -133,7 +132,7 @@ license = {file = "LICENSE"}
 version = "1.2.4"
 requires-python = ">= 3.10"
 dependencies = [
-    "cryptography>=42.0.0",
+    "cryptography<=48.0.5",
     "openpyxl>=3.0.0",
     "PySide6-Essentials~=6.8",
     "PySide6-Addons~=6.8",
