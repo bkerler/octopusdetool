@@ -1842,7 +1842,15 @@ class OctopusGermanyClient:
                 return reading
         return None
 
-    def get_consumption_graphql(self, property_id, period_from=None, period_to=None, fetch_all=False, progress_callback=None):
+    def get_consumption_graphql(
+        self,
+        property_id,
+        period_from=None,
+        period_to=None,
+        fetch_all=False,
+        progress_callback=None,
+        market_supply_point_id=None,
+    ):
         """
         Get raw consumption data using 15-minute GraphQL measurement intervals.
         
@@ -1879,15 +1887,16 @@ class OctopusGermanyClient:
                 total_page_count += 1
 
                 # Build variables for the measurements query
+                electricity_filters = {
+                    "readingFrequencyType": READING_FREQUENCY_TYPE,
+                    "readingDirection": requested_direction,
+                }
+                if market_supply_point_id is not None:
+                    electricity_filters["marketSupplyPointId"] = str(market_supply_point_id)
                 variables = {
                     "propertyId": property_id,
                     "first": GRAPHQL_PAGE_SIZE,
-                    "utilityFilters": [{
-                        "electricityFilters": {
-                            "readingFrequencyType": READING_FREQUENCY_TYPE,
-                            "readingDirection": requested_direction,
-                        }
-                    }],
+                    "utilityFilters": [{"electricityFilters": electricity_filters}],
                     "timezone": "Europe/Berlin"
                 }
 
@@ -3169,7 +3178,8 @@ def main():
             period_from=fetch_from,
             period_to=fetch_to,
             fetch_all=True,
-            progress_callback=cli_progress
+            progress_callback=cli_progress,
+            market_supply_point_id=malo_number,
         )
         if new_readings:
             print()  # New line after progress

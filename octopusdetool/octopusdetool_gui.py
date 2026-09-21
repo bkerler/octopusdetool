@@ -4304,6 +4304,7 @@ QDateEdit::drop-down {
                             period_to=fetch_to,
                             fetch_all=True,
                             progress_callback=update_progress,
+                            market_supply_point_id=malo_number,
                         )
                         if new_readings:
                             retrieved_through = max(

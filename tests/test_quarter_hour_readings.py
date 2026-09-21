@@ -67,7 +67,11 @@ def test_both_graphql_paths_request_native_intervals() -> None:
         }
 
     client._graphql_request = fake_request
-    readings = client.get_consumption_graphql("property", fetch_all=True)
+    readings = client.get_consumption_graphql(
+        "property",
+        fetch_all=True,
+        market_supply_point_id="malo",
+    )
     readings.extend(
         client.get_smart_usage("property", "malo", date(2026, 1, 1))
     )
@@ -79,6 +83,10 @@ def test_both_graphql_paths_request_native_intervals() -> None:
         for request in requests
     )
     assert all(request["first"] == 99 for request in requests)
+    assert all(
+        request["utilityFilters"][0]["electricityFilters"]["marketSupplyPointId"] == "malo"
+        for request in requests
+    )
     assert all(reading["end"] - reading["start"] == READING_INTERVAL for reading in readings)
 
 
